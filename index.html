@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>钢琴识谱启蒙游戏</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="side-panel" aria-label="游戏控制">
+        <header>
+          <p class="eyebrow">钢琴识谱启蒙</p>
+          <h1>气球音符课</h1>
+        </header>
+
+        <div class="mode-switch" role="tablist" aria-label="玩法模式">
+          <button id="mode-sing" class="active" type="button" role="tab" aria-selected="true">唱谱</button>
+          <button id="mode-play" type="button" role="tab" aria-selected="false">弹谱</button>
+        </div>
+
+        <section class="panel-block calibration-card" aria-label="校准">
+          <div>
+            <span class="label">当前校准</span>
+            <strong id="calibration-status">未校准</strong>
+          </div>
+          <p id="calibration-copy">先录入 7 个音名的发音模板。</p>
+          <div class="button-row">
+            <button id="calibrate" type="button">开始校准</button>
+            <button id="reset-calibration" type="button">重置</button>
+          </div>
+        </section>
+
+        <section class="panel-block mic-card" aria-label="麦克风授权">
+          <span class="label">音频入口</span>
+          <strong id="audio-status">等待授权</strong>
+          <button id="enable-audio" type="button">打开麦克风</button>
+        </section>
+
+        <section class="panel-block stats" aria-label="游戏状态">
+          <div>
+            <span class="label">分数</span>
+            <strong id="score">0</strong>
+          </div>
+          <div>
+            <span class="label">连击</span>
+            <strong id="streak">0</strong>
+          </div>
+          <div>
+            <span class="label">进度</span>
+            <strong id="progress">0 / 8</strong>
+          </div>
+        </section>
+
+        <section class="panel-block">
+          <span class="label">反馈</span>
+          <strong id="feedback">看气球上的音，准备发射音符</strong>
+        </section>
+
+        <div class="button-row bottom-actions">
+          <button id="restart" type="button">重玩</button>
+          <button id="playback" type="button">回放</button>
+        </div>
+      </section>
+
+      <section class="play-area" aria-label="识谱游戏舞台">
+        <canvas id="game-canvas" width="1080" height="810"></canvas>
+        <div class="input-pad" id="input-pad" aria-label="模拟识别输入"></div>
+      </section>
+    </main>
+
+    <script type="module" src="src/main.js"></script>
+  </body>
+</html>
+

@@ -31,6 +31,18 @@
           </div>
         </section>
 
+        <section class="panel-block live-audio-card" aria-label="实时声音监听">
+          <span class="label">环境监听</span>
+          <strong id="environment-status">等待麦克风</strong>
+          <div class="meter" aria-hidden="true">
+            <span id="level-meter"></span>
+          </div>
+          <div class="audio-readout">
+            <span id="detected-note">--</span>
+            <span id="detected-cents">--</span>
+          </div>
+        </section>
+
         <section class="panel-block mic-card" aria-label="麦克风授权">
           <span class="label">音频入口</span>
           <strong id="audio-status">等待授权</strong>
@@ -65,6 +77,27 @@
 
       <section class="play-area" aria-label="识谱游戏舞台">
         <canvas id="game-canvas" width="1080" height="810"></canvas>
+        <div class="calibration-stage" id="calibration-stage" aria-label="声音校准进度">
+          <div class="calibration-title">
+            <span id="stage-mode-label">唱谱校准</span>
+            <strong id="stage-prompt">请打开麦克风后开始校准</strong>
+          </div>
+          <div class="sing-calibration-grid" id="sing-calibration-grid"></div>
+          <div class="piano-calibration-card" id="piano-calibration-card">
+            <div class="central-c-card">
+              <span>中央 C</span>
+              <strong>C</strong>
+            </div>
+            <div class="pitch-gauge" aria-label="中央 C 音准表">
+              <span>低</span>
+              <div class="gauge-rail">
+                <i id="pitch-needle"></i>
+              </div>
+              <span>高</span>
+            </div>
+            <strong id="piano-calibration-result">等待中央 C</strong>
+          </div>
+        </div>
         <div class="input-pad" id="input-pad" aria-label="模拟识别输入"></div>
       </section>
     </main>
@@ -72,4 +105,3 @@
     <script type="module" src="src/main.js"></script>
   </body>
 </html>
-

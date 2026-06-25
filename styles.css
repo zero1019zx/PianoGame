@@ -134,6 +134,40 @@ h1 {
   font-size: 1.16rem;
 }
 
+.meter {
+  width: 100%;
+  height: 18px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: repeating-linear-gradient(90deg, #e5e8e2 0 18px, transparent 18px 25px);
+  border: 1px solid rgba(37, 48, 68, 0.1);
+}
+
+.meter span {
+  display: block;
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #66c56d, #ffd25c, #ff8aa0);
+  transition: width 120ms ease;
+}
+
+.audio-readout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.audio-readout span {
+  min-height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: rgba(74, 141, 246, 0.08);
+  color: #253044;
+  font-weight: 900;
+}
+
 .bottom-actions {
   align-self: end;
 }
@@ -162,6 +196,164 @@ h1 {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 8px;
+}
+
+.calibration-stage {
+  position: absolute;
+  left: 20px;
+  right: 20px;
+  top: 18px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(260px, 0.9fr);
+  gap: 14px;
+  align-items: stretch;
+  pointer-events: none;
+}
+
+.calibration-title {
+  grid-column: 1 / -1;
+  justify-self: center;
+  min-width: 340px;
+  padding: 10px 22px;
+  border-radius: 8px;
+  background: #fff4d9;
+  border: 2px solid rgba(135, 96, 42, 0.22);
+  box-shadow: 0 10px 24px rgba(73, 92, 119, 0.12);
+  text-align: center;
+}
+
+.calibration-title span {
+  display: block;
+  color: #4a8df6;
+  font-weight: 950;
+}
+
+.calibration-title strong {
+  display: block;
+  margin-top: 2px;
+  color: #4d3527;
+  font-size: 1.05rem;
+}
+
+.sing-calibration-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+  align-items: start;
+}
+
+.syllable-card {
+  min-height: 112px;
+  padding: 10px 6px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.84);
+  border: 3px solid rgba(98, 112, 132, 0.18);
+  box-shadow: 0 10px 24px rgba(73, 92, 119, 0.12);
+  text-align: center;
+}
+
+.syllable-card.active {
+  border-color: #ffd25c;
+  transform: translateY(-4px);
+}
+
+.syllable-card.done {
+  border-color: #66c56d;
+}
+
+.syllable-card strong {
+  color: #253044;
+  font-size: 1.2rem;
+}
+
+.syllable-card span {
+  color: #627084;
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
+.wave-mini {
+  width: 54px;
+  height: 24px;
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, transparent 0 8%, #4a8df6 8% 12%, transparent 12% 20%, #4a8df6 20% 25%, transparent 25% 34%, #4a8df6 34% 41%, transparent 41% 50%, #4a8df6 50% 56%, transparent 56% 66%, #4a8df6 66% 70%, transparent 70% 100%);
+  opacity: 0.72;
+}
+
+.piano-calibration-card {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  padding: 14px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.84);
+  border: 2px solid rgba(74, 141, 246, 0.22);
+  box-shadow: 0 10px 24px rgba(73, 92, 119, 0.12);
+}
+
+.central-c-card {
+  min-height: 130px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: #e9f4ff;
+  border: 2px solid rgba(74, 141, 246, 0.3);
+}
+
+.central-c-card span {
+  color: #2464b8;
+  font-weight: 950;
+}
+
+.central-c-card strong {
+  color: #2874d3;
+  font-size: 4.1rem;
+  line-height: 0.85;
+}
+
+.pitch-gauge {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: center;
+  color: #627084;
+  font-weight: 950;
+}
+
+.gauge-rail {
+  position: relative;
+  height: 68px;
+  border-top: 8px solid #66c56d;
+  border-radius: 90% 90% 0 0;
+}
+
+.gauge-rail i {
+  position: absolute;
+  left: 50%;
+  top: -13px;
+  width: 8px;
+  height: 62px;
+  border-radius: 999px;
+  background: #4a8df6;
+  transform: translateX(-50%) rotate(0deg);
+  transform-origin: 50% 100%;
+  transition: transform 160ms ease;
+}
+
+#piano-calibration-result {
+  grid-column: 2;
+  color: #218a3f;
+  font-size: 1.1rem;
+}
+
+.play-area.mode-sing .piano-calibration-card,
+.play-area.mode-play .sing-calibration-grid {
+  display: none;
 }
 
 .input-pad button {
@@ -220,5 +412,8 @@ h1 {
   #game-canvas {
     min-height: 580px;
   }
-}
 
+  .calibration-stage {
+    grid-template-columns: 1fr;
+  }
+}

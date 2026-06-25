@@ -9,7 +9,7 @@
 ## Design Decision
 
 - The provided plan is detailed enough to act as the approved design.
-- Real speech / pitch recognition is represented by replaceable adapters and child-friendly simulated inputs in this MVP shell.
+- The MVP now includes a real Web Audio microphone path. It uses lightweight pitch/template matching today and keeps manual buttons as a child-friendly fallback and automated-test path.
 - The product flow still includes microphone permission, singing calibration, central-C piano calibration, local cached calibration, reset controls, balloon hit feedback, staff placement, and rhythm playback.
 
 ## Progress
@@ -22,6 +22,10 @@
 - Rebuilt `index.html`, `styles.css`, and `src/main.js` for the iPad landscape H5 experience.
 - Updated the browser smoke test for the new flow and screenshot artifact.
 - Ran the develop-web-game Playwright client through `.logs/web_game_playwright_client.js` with screenshots and state JSON under `.logs/web-game-client/`.
+- Added `src/audioAnalysis.js` with tested frequency/MIDI conversion, environment classification, singing-template matching, and pitch-target matching.
+- Added a real Web Audio microphone pipeline in `src/main.js`: getUserMedia, AnalyserNode time-domain samples, lightweight autocorrelation pitch detection, live environment meter, singing calibration templates, central-C piano calibration, and automatic current-balloon judging.
+- Updated the UI toward the attached calibration reference: syllable cards, waveform chips, environment monitor, detected note/cents readout, and central-C gauge.
+- Upgraded singing recognition to true MFCC feature extraction plus DTW sequence matching. The old pitch-template path remains only as a fallback when no MFCC template is present.
 
 ## Verification Notes
 

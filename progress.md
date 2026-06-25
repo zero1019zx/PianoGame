@@ -7,8 +7,10 @@ Original prompt: 复用该项目的做法，开展下一项目的工作：钢琴
 - 2026-06-25: Added TDD tests for calibration, hit/miss flow, staff placement, and playback events.
 - 2026-06-25: Replaced the rhythm-game UI with a balloon/staff notation MVP interface.
 - 2026-06-25: Browser smoke passed and develop-web-game client produced screenshots/state JSON.
+- 2026-06-25: Added real Web Audio microphone analysis, environment monitoring, singing template capture, central-C piano calibration, and automatic audio-to-balloon judging.
+- 2026-06-25: Upgraded singing recognition from pitch-template fallback to MFCC feature extraction plus DTW sequence matching.
 
 ## TODO
 
-- Future: replace simulated buttons with real MFCC/DTW singing adapter and YIN/CREPE pitch adapter.
+- Future: tune MFCC/DTW thresholds with real child-voice recordings and add a stronger YIN/CREPE pitch adapter for piano.
 - Future: add child profile switching UI backed by IndexedDB.

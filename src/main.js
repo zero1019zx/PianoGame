@@ -123,6 +123,19 @@ const dbgMic = document.querySelector('#dbg-mic');
 const dbgRecord = document.querySelector('#dbg-record');
 const dbgDownloadLog = document.querySelector('#dbg-download-log');
 const dbgRecordState = document.querySelector('#dbg-record-state');
+const recogModeEl = document.querySelector('#recog-mode');
+
+function renderRecogMode() {
+  recogModeEl.querySelectorAll('button').forEach((b) => {
+    b.classList.toggle('active', b.dataset.mode === recognitionMode);
+  });
+}
+recogModeEl.addEventListener('click', (event) => {
+  const btn = event.target.closest('button[data-mode]');
+  if (!btn) return;
+  saveRecognitionMode(btn.dataset.mode);
+  renderRecogMode();
+});
 
 let cal = { phase: 'idle', sing: null, piano: null, lastNeedle: 0 };
 let debugOpen = false;
@@ -364,7 +377,7 @@ async function finishDebugRecording() {
     log: debugLog
   };
   try {
-    localStorage.setItem('notation-debug-last', JSON.stringify(payload));
+    window.localStorage.setItem('notation-debug-last', JSON.stringify(payload));
   } catch {
     // localStorage may be unavailable; download still works.
   }
@@ -380,7 +393,7 @@ async function finishDebugRecording() {
 function downloadLastLog() {
   let raw = null;
   try {
-    raw = localStorage.getItem('notation-debug-last');
+    raw = window.localStorage.getItem('notation-debug-last');
   } catch {
     raw = null;
   }
@@ -421,6 +434,7 @@ const calibrationScreen = {
     cal = { phase: 'idle', sing: null, piano: null, lastNeedle: 0 };
     calEnvPill.textContent = engine.isReady() ? '麦克风已就绪' : '等待麦克风';
     calSingControls.hidden = true;
+    renderRecogMode();
     renderSyllables();
     renderPianoResult();
   },
@@ -469,11 +483,58 @@ let liveCents = null;
 let wrongFlash = 0;
 let bestStreak = 0;
 let balloonPos = { x: 0, y: 0, rx: 0, ry: 0 };
+let liveRecognized = null;
+let hitAnim = null;
+
+// Recognition strictness. Name (MFCC/timbre) is always the primary signal; the
+// modes only change how much the sung pitch matters.
+const RECOG = {
+  loose: { needPitch: false, cents: Infinity, tol: 36 }, // 只看唱名
+  standard: { needPitch: true, cents: 220, tol: 32 }, // 名字 + 大致音高(±~2 半音)
+  strict: { needPitch: true, cents: 70, tol: 28 } // 名字 + 准音高(±~0.7 半音)
+};
+let recognitionMode = loadRecognitionMode();
+
+function loadRecognitionMode() {
+  try {
+    return window.localStorage.getItem('notation-recognition-mode') || 'loose';
+  } catch {
+    return 'loose';
+  }
+}
+function saveRecognitionMode(value) {
+  recognitionMode = value;
+  try {
+    window.localStorage.setItem('notation-recognition-mode', value);
+  } catch {
+    // ignore
+  }
+}
+// Octave-agnostic pitch distance (kids sing the name at any octave).
+function pitchClassCents(frequency, targetMidi) {
+  const m = 69 + 12 * Math.log2(frequency / 440);
+  let d = ((m - targetMidi) % 12 + 12) % 12;
+  if (d > 6) d -= 12;
+  return d * 100;
+}
 
 const HUD_COPY = {
   sing: { title: '请唱出气球里的音符', sub: '唱对后，音符会飞上去填在乐谱上哦！' },
   play: { title: '看气球里的音符，在钢琴上弹出它！', sub: '弹对后，音符会飞上去填在乐谱上哦！' }
 };
+
+// Hit animation timeline: cannon shot → balloon pop → note flies to its staff slot.
+const ANIM = { launch: 0.32, pop: 0.2, fly: 0.46 };
+const ANIM_TOTAL = ANIM.launch + ANIM.pop + ANIM.fly;
+
+function startHitAnim(target) {
+  hitAnim = {
+    t: 0,
+    note: target,
+    slot: Math.max(0, game.placedNotes.length - 1),
+    from: { ...balloonPos }
+  };
+}
 
 function startGame(nextMode) {
   mode = nextMode;
@@ -484,8 +545,10 @@ function startGame(nextMode) {
   playbackEvents = [];
   nextPlaybackIndex = 0;
   liveCents = null;
+  liveRecognized = null;
   wrongFlash = 0;
   bestStreak = 0;
+  hitAnim = null;
   hudTitle.textContent = HUD_COPY[mode].title;
   hudSub.textContent = HUD_COPY[mode].sub;
   modeBadgeName.textContent = MODE_BADGE[mode].name;
@@ -501,7 +564,7 @@ function handleInput(option) {
   const payload = mode === 'sing' ? { mode, solfege: option.value } : { mode, midi: option.value };
   const result = submitInput(game, payload);
   if (result.correct) {
-    burstTimer = 0.7;
+    startHitAnim(result.target);
     engine.playTone(result.target.midi, 0.16);
     if (game.phase === 'playback') startPlayback();
     renderInputs();
@@ -581,28 +644,43 @@ function startPlayback() {
 function judgeLiveAudio(live) {
   if (!engine.isReady() || audioJudgeCooldown > 0 || game.phase !== 'aiming') return;
   const target = getCurrentTarget(game);
-  if (!target || !live.frequency || live.confidence < 0.56 || live.rms < 0.014) return;
+  if (!target || live.rms < 0.009) return; // no pitch-confidence gate: the name is what matters
   const calibration = loadCalibrationState(store, mode);
   if (!calibration.completed) return;
 
   if (mode === 'sing') {
+    const cfg = RECOG[recognitionMode] ?? RECOG.loose;
+    // Name is decided by timbre (MFCC/DTW), independent of how high/low they sang.
     const match = matchSingingTemplate({
       detectedFrequency: live.frequency,
-      detectedMfccSequence: live.mfccSequence.slice(-10),
+      detectedMfccSequence: live.mfccSequence.slice(-12),
       templates: calibration.templates ?? [],
-      toleranceCents: 150,
-      tolerance: 30
+      toleranceCents: 9999,
+      tolerance: cfg.tol
     });
-    liveCents = match.cents ?? null;
-    if (match.correct && match.solfege === target.solfege) {
+    liveRecognized = match.solfege ?? liveRecognized;
+    if (!match.correct || !match.solfege) return; // not a confident name yet
+
+    // Pitch is only an optional gate, octave-agnostic.
+    let pitchOk = true;
+    if (cfg.needPitch && live.frequency) {
+      const cents = pitchClassCents(live.frequency, target.midi);
+      liveCents = cents;
+      pitchOk = Math.abs(cents) <= cfg.cents;
+    } else {
+      liveCents = null;
+    }
+
+    if (match.solfege === target.solfege && pitchOk) {
       registerAudioHit(submitInput(game, { mode: 'sing', solfege: target.solfege }));
-    } else if (match.correct && match.solfege) {
+    } else if (match.solfege !== target.solfege) {
       submitInput(game, { mode: 'sing', solfege: match.solfege });
       audioJudgeCooldown = 1.1;
       wrongFlash = 0.8;
       updateGameHud();
     }
   } else {
+    if (!live.frequency || live.confidence < 0.5) return;
     const match = matchDetectedPitch({
       targetMidi: target.midi,
       detectedFrequency: live.frequency,
@@ -623,7 +701,7 @@ function judgeLiveAudio(live) {
 
 function registerAudioHit(result) {
   if (!result.correct) return;
-  burstTimer = 0.7;
+  startHitAnim(result.target);
   audioJudgeCooldown = 0.95;
   engine.playTone(result.target.midi, 0.16);
   if (game.phase === 'playback') startPlayback();
@@ -636,12 +714,18 @@ function gameFrame(dt, live) {
   audioJudgeCooldown = Math.max(0, audioJudgeCooldown - dt);
   wrongFlash = Math.max(0, wrongFlash - dt);
 
-  if (game.phase === 'burst') {
-    burstTimer -= dt;
-    if (burstTimer <= 0) {
-      settleBurst(game);
-      renderInputs();
+  if (hitAnim) {
+    hitAnim.t += dt;
+    if (hitAnim.t >= ANIM_TOTAL) {
+      hitAnim = null;
+      if (game.phase === 'burst') {
+        settleBurst(game);
+        renderInputs();
+      }
     }
+  } else if (game.phase === 'burst') {
+    settleBurst(game);
+    renderInputs();
   }
   if (game.phase === 'playback' && playbackEvents.length > 0) {
     playbackTimer += dt * 1000;
@@ -660,8 +744,10 @@ function gameFrame(dt, live) {
 function updateGameHud(live = engine.getLive()) {
   bestStreak = Math.max(bestStreak, game.streak);
   gameMicBtn.classList.toggle('live', engine.isReady());
-  listenPanel.classList.toggle('live', live.rms > 0.02);
-  detectedNote.textContent = live.midi ? midiName(live.midi) : '--';
+  listenPanel.classList.toggle('live', live.rms > 0.015);
+  detectedNote.textContent = mode === 'sing'
+    ? (liveRecognized ?? '--')
+    : (live.midi ? midiName(live.midi) : '--');
   detectedCents.textContent = Number.isFinite(liveCents)
     ? (Math.abs(liveCents) <= 15 ? '准' : liveCents > 0 ? '偏高' : '偏低')
     : '';
@@ -700,8 +786,8 @@ function draw() {
   drawStaff(width, height);
   drawPlacedNotes(width, height);
   drawBalloon(width, height);
-  drawProjectile(width, height);
   drawLauncher(width, height);
+  drawHitAnim(width, height);
   drawWrongMarker(width, height);
 }
 
@@ -763,6 +849,8 @@ function drawPlacedNotes(width, height) {
   const span = width * 0.6;
   const gap = span / Math.max(1, game.song.notes.length - 1);
   game.placedNotes.forEach((songNote, index) => {
+    // The most recently placed note is the one currently flying in the hit animation.
+    if (hitAnim && index === game.placedNotes.length - 1) return;
     const x = startX + index * gap;
     const y = noteY(height, songNote);
     const color = SOLF_COLORS[SOLFEGE.indexOf(songNote.solfege)] ?? '#3f8de0';
@@ -783,21 +871,29 @@ function drawPlacedNotes(width, height) {
 }
 
 function drawBalloon(width, height) {
+  // During a hit the balloon only shows while the projectile is incoming, then pops.
+  if (hitAnim) {
+    if (hitAnim.t < ANIM.launch) {
+      drawBalloonAt(hitAnim.from.x, hitAnim.from.y, hitAnim.from.rx, hitAnim.from.ry, hitAnim.note);
+    }
+    return;
+  }
   if (!game.balloon) return;
-  const target = getCurrentTarget(game) ?? game.placedNotes.at(-1);
+  const target = getCurrentTarget(game);
+  if (!target) return;
   const bob = Math.sin(elapsed * 2.8) * 10;
   const x = width * 0.6;
   const y = height * 0.52 + bob;
   const rx = Math.min(94, width * 0.088);
   const ry = rx * 1.16;
-  const placed = game.balloon.state === 'placed';
   balloonPos = { x, y, rx, ry };
+  drawBalloonAt(x, y, rx, ry, target);
+}
 
-  ctx.save();
-  if (placed) ctx.globalAlpha = 0.4;
+function drawBalloonAt(x, y, rx, ry, note) {
   const drew = drawSpriteContain('balloon_note_question', x, y, rx * 2.7, ry * 2.6, 'center');
   if (!drew) {
-    ctx.fillStyle = placed ? 'rgba(155, 120, 214, 0.3)' : '#9b6cd6';
+    ctx.fillStyle = '#9b6cd6';
     ctx.beginPath();
     ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
     ctx.fill();
@@ -815,61 +911,97 @@ function drawBalloon(width, height) {
     ctx.quadraticCurveTo(x - 18, y + ry + 40, x + 8, y + ry + 80);
     ctx.stroke();
   }
-  ctx.restore();
-
-  // The target is shown as actual notation (mini-staff + notehead) — this is the 识谱 core.
-  if (target) drawBalloonNotation(x, y, rx, ry, target, placed);
+  if (note) drawBalloonNotation(x, y, rx, ry, note);
 }
 
-function drawBalloonNotation(x, y, rx, ry, target, placed) {
-  const winW = rx * 1.5;
-  const winH = ry * 1.12;
-  const mg = winH * 0.17;
-  const sw = winW * 0.4;
+function drawBalloonNotation(x, y, rx, ry, target) {
+  // Compact notation window on the upper half of the balloon (smaller than the balloon).
+  const winW = rx * 1.12;
+  const winH = ry * 0.82;
+  const cy = y - ry * 0.05;
+  const mg = winH * 0.18;
+  const sw = winW * 0.38;
   ctx.save();
-  if (placed) ctx.globalAlpha = 0.5;
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.88)';
-  roundedRect(x - winW / 2, y - winH / 2, winW, winH, winH * 0.16);
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+  roundedRect(x - winW / 2, cy - winH / 2, winW, winH, winH * 0.18);
   ctx.fill();
-  ctx.strokeStyle = 'rgba(43, 58, 79, 0.78)';
-  ctx.lineWidth = 1.6;
+  ctx.strokeStyle = 'rgba(43, 58, 79, 0.8)';
+  ctx.lineWidth = 1.4;
   for (let k = 0; k < 5; k += 1) {
-    const ly = y + (k - 2) * mg;
+    const ly = cy + (k - 2) * mg;
     ctx.beginPath();
     ctx.moveTo(x - sw, ly);
     ctx.lineTo(x + sw, ly);
     ctx.stroke();
   }
-  const noteY2 = y + 2 * mg - target.staffStep * (mg * 0.5);
+  const ny = cy + 2 * mg - target.staffStep * (mg * 0.5);
   const color = SOLF_COLORS[SOLFEGE.indexOf(target.solfege)] ?? '#46566f';
   ctx.save();
-  ctx.translate(x, noteY2);
+  ctx.translate(x, ny);
   ctx.rotate(-0.3);
   ctx.fillStyle = color;
   ctx.beginPath();
-  ctx.ellipse(0, 0, mg * 0.64, mg * 0.5, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 0, mg * 0.6, mg * 0.46, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
   ctx.strokeStyle = color;
-  ctx.lineWidth = 2.4;
+  ctx.lineWidth = 2.2;
   ctx.beginPath();
-  ctx.moveTo(x + mg * 0.56, noteY2 - 1);
-  ctx.lineTo(x + mg * 0.56, noteY2 - mg * 2.2);
+  ctx.moveTo(x + mg * 0.52, ny - 1);
+  ctx.lineTo(x + mg * 0.52, ny - mg * 2.1);
   ctx.stroke();
   ctx.restore();
 }
 
-function drawProjectile(width, height) {
-  if (game.phase !== 'burst') return;
-  const fromX = width * 0.15;
-  const fromY = height * 0.8;
-  const t = 1 - Math.max(0, Math.min(1, burstTimer / 0.7));
-  const x = fromX + (balloonPos.x - fromX) * t;
-  const y = fromY + (balloonPos.y - fromY) * t - Math.sin(t * Math.PI) * 64;
-  const size = Math.min(72, width * 0.06);
-  if (!drawSpriteContain('note_projectile', x, y, size, size, 'center')) {
-    drawNoteHead(x, y, staffGap(height), '#ffd25c');
+function drawHitAnim(width, height) {
+  if (!hitAnim) return;
+  const t = hitAnim.t;
+  const b = hitAnim.from;
+  const cannonX = width * 0.15;
+  const cannonY = height * 0.8;
+  const color = SOLF_COLORS[SOLFEGE.indexOf(hitAnim.note.solfege)] ?? '#3f8de0';
+
+  if (t < ANIM.launch) {
+    const p = t / ANIM.launch;
+    const x = cannonX + (b.x - cannonX) * p;
+    const y = cannonY + (b.y - cannonY) * p - Math.sin(p * Math.PI) * 60;
+    const size = Math.min(64, width * 0.05);
+    if (!drawSpriteContain('note_projectile', x, y, size, size, 'center')) {
+      drawNoteHead(x, y, staffGap(height), '#ffd25c');
+    }
+  } else if (t < ANIM.launch + ANIM.pop) {
+    drawPop(b.x, b.y, b.rx, (t - ANIM.launch) / ANIM.pop);
+  } else {
+    const p = Math.min(1, (t - ANIM.launch - ANIM.pop) / ANIM.fly);
+    const e = p * p * (3 - 2 * p); // smoothstep
+    const gap = (width * 0.6) / Math.max(1, game.song.notes.length - 1);
+    const tx = width * 0.2 + hitAnim.slot * gap;
+    const ty = noteY(height, hitAnim.note);
+    const x = b.x + (tx - b.x) * e;
+    const y = b.y + (ty - b.y) * e;
+    drawNoteHead(x, y, staffGap(height), color);
   }
+}
+
+function drawPop(x, y, rx, p) {
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, 1 - p);
+  ctx.strokeStyle = '#9b6cd6';
+  ctx.lineWidth = 3;
+  const r = rx * (1 + p * 0.9);
+  for (let i = 0; i < 8; i += 1) {
+    const a = (i / 8) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(x + Math.cos(a) * rx * 0.5, y + Math.sin(a) * rx * 0.5);
+    ctx.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r);
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#ffd25c';
+  ctx.font = `900 ${rx * 0.55}px ui-rounded, system-ui`;
+  ctx.textAlign = 'center';
+  ctx.fillText('啪！', x, y - r * 0.5);
+  ctx.textAlign = 'start';
+  ctx.restore();
 }
 
 function drawLauncher(width, height) {

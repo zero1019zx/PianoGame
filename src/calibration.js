@@ -19,7 +19,7 @@ export const SING_CAPTURE = {
   minSamples: 5, // MFCC frames required (≈0.6s of voiced audio)
   maxDuration: 2.6, // auto-finalize after this with ≥3 samples so it never stalls
   minTimeoutSamples: 3,
-  rmsGate: 0.012 // ignore frames quieter than this
+  rmsGate: 0.008 // ignore frames quieter than this (tuned for quiet laptop mics)
 };
 
 export const PIANO_CAPTURE = {
@@ -27,8 +27,8 @@ export const PIANO_CAPTURE = {
   minSamples: 8, // stable pitch frames required
   maxDuration: 3.2, // auto-finalize after this with ≥4 samples
   minTimeoutSamples: 4,
-  confidenceGate: 0.45, // ignore unstable pitch frames
-  rmsGate: 0.012
+  confidenceGate: 0.4, // ignore unstable pitch frames
+  rmsGate: 0.008
 };
 
 export function createSingSession() {

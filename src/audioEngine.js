@@ -14,7 +14,10 @@ import {
 const MFCC_INTERVAL = 0.12;
 const PITCH_DECIMATION = 2;
 const MFCC_SEQUENCE_LIMIT = 18;
-const SILENCE_RMS = 0.01;
+// Lowered for quiet laptop mics: real child singing measured ~0.015 RMS, which
+// the old 0.012 MFCC gate often rejected, so no voice features were captured.
+const SILENCE_RMS = 0.006;
+const MFCC_RMS_GATE = 0.007;
 
 export function createAudioEngine() {
   let audioContext = null;
@@ -139,7 +142,7 @@ export function createAudioEngine() {
 
     mfccTimer -= dt;
     let mfcc = live.mfcc;
-    if (mfccTimer <= 0 && rms >= 0.012) {
+    if (mfccTimer <= 0 && rms >= MFCC_RMS_GATE) {
       mfccTimer = MFCC_INTERVAL;
       mfcc = extractMfcc(timeBuffer, audioContext.sampleRate);
       mfccFrameId += 1;

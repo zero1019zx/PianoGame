@@ -28,6 +28,11 @@ Original prompt: 复用该项目的做法，开展下一项目的工作：钢琴
 
 - 2026-06-26: Added a mic diagnostic panel on the calibration screen (🔧 诊断 toggle, fixed bottom-left). Live readout: mic ready, sampleRate, rms (+gate), f0, confidence, mfcc frame id, samples-this-take, phase/take. 「录 5 秒并下载」 records the real mic via MediaRecorder → downloads `calib-debug-audio.*` plus a per-frame `calib-debug-log.json` (t/rms/f0/conf/mfcc/samples), and stashes the last log in localStorage (`notation-debug-last`) for re-download. Purpose: tell apart a silent mic (permission/`file://`) from audio-fine-but-capture-rejecting (threshold/logic). Engine gained `startCapture`/`stopCapture`/`getSampleRate`. Verified: npm test 19 pass + jsdom smoke for the panel.
 
+- 2026-06-26: Diagnosed from the user's recording (peak 0.046, per-frame RMS max 0.0215, median 0.0104): the mic works but is quiet, and the engine only computed MFCC above RMS 0.012, so most singing produced no features. Lowered gates — engine MFCC 0.012→0.007, silence 0.01→0.006; calibration sing/piano rmsGate→0.008. In-game judging no longer requires pitch confidence and uses rms≥0.009.
+- 2026-06-26: Reworked sing recognition to be **name-first** with three strictness modes (loose/standard/strict) chosen by the user, persisted in localStorage, toggled on the calibration screen. Name comes from MFCC/DTW (timbre), pitch is only an optional, octave-agnostic gate (loose ignores it). 听到 box now shows the recognized 唱名.
+- 2026-06-26: Implemented the hit animation: cannon shot → balloon pop (啪!) → the note flies to its correct staff slot → lands; the next balloon only appears after the animation; final-note animation runs through into playback. Singing the sequence now visibly reconstructs the score, then plays back. Shrank the oversized in-balloon notation window and re-sized noteheads.
+- 2026-06-26: Verified — npm test 19 pass; jsdom game smoke covers recog-mode persistence, hit-animation settle timing, and full 8-note reconstruction. (Real-mic feel still needs an on-device pass with the new gates.)
+
 ## TODO
 
 - The `keyboard_reference_strip` slice is now superseded by the interactive CSS keyboard; `panel_voice/piano_listening` slices remain reserved (the live listen panel is DOM/CSS). Wire them as decorative tablet backdrops only if desired.

@@ -410,6 +410,32 @@ button { border: 0; font: inherit; cursor: pointer; color: inherit; }
 }
 .mini-key.is-c { background: #d8ecff; border-color: var(--sky-deep); color: var(--sky-deep); }
 
+.recog-mode {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 16px;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 8px 18px rgba(40, 70, 110, 0.12);
+}
+.recog-label { font-weight: 900; color: var(--ink); font-size: clamp(0.82rem, 1.4vw, 1rem); flex: none; }
+.recog-seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; flex: 1; }
+.recog-seg button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 7px 6px;
+  border-radius: 12px;
+  background: #eef1f5;
+  color: var(--ink-soft);
+  font-weight: 900;
+  font-size: clamp(0.82rem, 1.4vw, 1rem);
+}
+.recog-seg button small { font-size: 0.62rem; font-weight: 700; opacity: 0.85; }
+.recog-seg button.active { background: var(--blue); color: #fff; }
+
 .cal-env {
   display: grid;
   grid-template-columns: auto 1fr auto;

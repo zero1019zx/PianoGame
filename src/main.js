@@ -1,16 +1,10 @@
 import {
-  buildSingingTemplate,
   centsBetween,
-  classifyEnvironment,
-  detectPitchFromTimeDomain,
-  extractMfcc,
-  frequencyToMidi,
   matchDetectedPitch,
   matchSingingTemplate,
   midiToFrequency
 } from './audioAnalysis.js';
 import {
-  MODES,
   SOLFEGE,
   createGame,
   getCurrentTarget,
@@ -20,74 +14,269 @@ import {
   resetCalibration,
   settleBurst,
   staffYForNote,
-  submitCalibration,
   submitInput
 } from './notationGame.js';
-import { createBrowserCalibrationStore, openProfileDatabase } from './storage.js';
+import {
+  activeSolfege,
+  createPianoSession,
+  createSingSession,
+  feedPianoFrame,
+  feedSingFrame,
+  persistPianoCalibration,
+  persistSingCalibration
+} from './calibration.js';
+import { createAudioEngine } from './audioEngine.js';
+import {
+  createBrowserCalibrationStore,
+  openProfileDatabase,
+  saveCalibrationProfile
+} from './storage.js';
 
+const SOLFEGE_KEYS = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
+const SOLFEGE_MIDI = [60, 62, 64, 65, 67, 69, 71];
+
+const engine = createAudioEngine();
+const store = createBrowserCalibrationStore();
+openProfileDatabase().catch(() => null);
+
+// ---------------------------------------------------------------- router ----
+const screenEls = Object.fromEntries(
+  [...document.querySelectorAll('.screen')].map((el) => [el.dataset.screen, el])
+);
+let current = 'home';
+
+function go(screen, opts = {}) {
+  if (screens[current]?.exit) screens[current].exit();
+  for (const [name, el] of Object.entries(screenEls)) {
+    el.hidden = name !== screen;
+    el.classList.toggle('is-active', name === screen);
+  }
+  current = screen;
+  screens[screen]?.enter?.(opts);
+}
+
+document.querySelectorAll('[data-go-home]').forEach((btn) => btn.addEventListener('click', () => go('home')));
+
+// ================================================================ HOME ======
+const pills = {
+  sing: document.querySelector('#pill-sing'),
+  play: document.querySelector('#pill-play'),
+  calibration: document.querySelector('#pill-calibration')
+};
+
+function setPill(el, ready, readyText) {
+  el.textContent = ready ? readyText : '需要校准';
+  el.classList.toggle('ready', ready);
+  el.classList.toggle('warn', !ready);
+}
+
+function refreshHomePills() {
+  const singReady = loadCalibrationState(store, 'sing').completed;
+  const playReady = loadCalibrationState(store, 'play').completed;
+  setPill(pills.sing, singReady, '声音就绪');
+  setPill(pills.play, playReady, '中央C就绪');
+  setPill(pills.calibration, singReady && playReady, '已校准');
+}
+
+document.querySelector('#card-sing').addEventListener('click', () => go('game', { mode: 'sing' }));
+document.querySelector('#card-play').addEventListener('click', () => go('game', { mode: 'play' }));
+document.querySelector('#card-calibration').addEventListener('click', () => go('calibration'));
+document.querySelector('#home-gear').addEventListener('click', () => go('calibration'));
+
+const homeScreen = { enter: refreshHomePills };
+
+// ========================================================= CALIBRATION ======
+const calEnvPill = document.querySelector('#cal-env-pill');
+const calEnvState = document.querySelector('#cal-env-state');
+const calLevel = document.querySelector('#cal-level');
+const calSyllables = document.querySelector('#cal-syllables');
+const calNeedle = document.querySelector('#cal-needle');
+const calCResult = document.querySelector('#cal-c-result');
+const calMiniPiano = document.querySelector('#cal-mini-piano');
+const calStartBtn = document.querySelector('#cal-start');
+const calDoneBtn = document.querySelector('#cal-done');
+const calResetBtn = document.querySelector('#cal-reset');
+
+let cal = { phase: 'idle', sing: null, piano: null, lastNeedle: 0 };
+
+['B', 'C', 'D', 'E', 'F'].forEach((key) => {
+  const el = document.createElement('div');
+  el.className = `mini-key${key === 'C' ? ' is-c' : ''}`;
+  el.textContent = key;
+  calMiniPiano.append(el);
+});
+
+function renderSyllables() {
+  const singState = loadCalibrationState(store, 'sing');
+  const savedDone = new Set((singState.templates ?? []).filter((t) => t.completed).map((t) => t.solfege));
+  const activeIndex = cal.phase === 'sing' ? cal.sing.stepIndex : -1;
+  calSyllables.innerHTML = '';
+  SOLFEGE.forEach((solfege, index) => {
+    const sessionDone = cal.phase === 'sing' && index < cal.sing.stepIndex;
+    const done = sessionDone || savedDone.has(solfege);
+    const active = index === activeIndex;
+    const card = document.createElement('div');
+    card.className = `syllable-card syl-n${index + 1}${active ? ' active' : ''}${done ? ' done' : ''}`;
+    card.innerHTML = `
+      <span class="syl">${solfege}</span>
+      <span class="key">(${SOLFEGE_KEYS[index]})</span>
+      <svg class="wave" viewBox="0 0 40 14" preserveAspectRatio="none" aria-hidden="true">
+        <path d="M0 7 Q3 1 6 7 T12 7 T18 7 T24 7 T30 7 T36 7 T42 7" fill="none" stroke="currentColor" stroke-width="2"/>
+      </svg>
+      <span class="state">${done ? '已识别' : active ? '录音中' : '待录入'}</span>`;
+    calSyllables.append(card);
+  });
+}
+
+function renderNeedle(offsetCents) {
+  const clamped = Math.max(-50, Math.min(50, offsetCents));
+  calNeedle.style.transform = `translateX(-50%) rotate(${clamped * 0.9}deg)`;
+}
+
+function renderPianoResult() {
+  const playState = loadCalibrationState(store, 'play');
+  if (cal.phase === 'piano') {
+    calCResult.textContent = '请弹中央 C，按住别松手…';
+    calCResult.classList.remove('good');
+  } else if (playState.completed) {
+    const offset = playState.centralCOffsetCents ?? 0;
+    calCResult.textContent = `音准良好，偏移 ${offset > 0 ? '+' : ''}${offset} cents`;
+    calCResult.classList.add('good');
+    renderNeedle(offset);
+  } else {
+    calCResult.textContent = '等待中央 C';
+    calCResult.classList.remove('good');
+    renderNeedle(0);
+  }
+}
+
+function setCalHint(text) {
+  calEnvState.textContent = text;
+}
+
+async function startCalibration() {
+  if (!engine.isReady()) {
+    calEnvPill.textContent = '正在请求麦克风…';
+    const result = await engine.enable();
+    if (!result.ok) {
+      calEnvPill.textContent = result.reason === 'denied' ? '麦克风被拒绝，请在浏览器允许' : '此设备无法使用麦克风';
+      return;
+    }
+  }
+  engine.resetSequence();
+  cal = { phase: 'sing', sing: createSingSession(), piano: null, lastNeedle: 0 };
+  calStartBtn.querySelector('small').textContent = '请依次唱 Do Re Mi…';
+  renderSyllables();
+  renderPianoResult();
+}
+
+function finishSingPhase() {
+  persistSingCalibration(store, cal.sing.templates);
+  snapshotProfile();
+  cal.phase = 'piano';
+  cal.piano = createPianoSession();
+  engine.resetSequence();
+  renderSyllables();
+  renderPianoResult();
+}
+
+function finishPianoPhase(result) {
+  persistPianoCalibration(store, result);
+  snapshotProfile();
+  cal.phase = 'done';
+  calStartBtn.querySelector('small').textContent = '校准完成，可重新校准';
+  renderPianoResult();
+}
+
+function snapshotProfile() {
+  saveCalibrationProfile({
+    sing: loadCalibrationState(store, 'sing'),
+    play: loadCalibrationState(store, 'play')
+  }).catch(() => null);
+}
+
+function calibrationFrame(dt, live) {
+  // environment monitor (always live once mic is on)
+  calLevel.style.width = `${Math.min(100, Math.round(live.rms * 620))}%`;
+  if (engine.isReady()) {
+    calEnvPill.textContent = live.environment.label;
+    calEnvPill.classList.toggle('good', live.environment.status === 'good');
+    calEnvPill.classList.toggle('noisy', live.environment.status === 'noisy');
+    const stateLabel = { quiet: '安静 🙂', good: '安静 😄', noisy: '偏吵 😟', listening: '监听中 🙂', idle: '等待 🙂' };
+    setCalHint(`当前：${stateLabel[live.environment.status] ?? '监听中 🙂'}`);
+  }
+
+  if (cal.phase === 'sing') {
+    const { captured, done } = feedSingFrame(cal.sing, live, dt);
+    if (captured) {
+      engine.playTone(captured.template.midi ?? SOLFEGE_MIDI[captured.stepIndex], 0.16);
+      renderSyllables();
+    }
+    if (done) finishSingPhase();
+  } else if (cal.phase === 'piano') {
+    if (live.frequency) renderNeedle(centsBetween(midiToFrequency(60), live.frequency));
+    const { result, done } = feedPianoFrame(cal.piano, live, dt);
+    if (done && result) {
+      engine.playTone(60, 0.18);
+      finishPianoPhase(result);
+    }
+  }
+}
+
+calStartBtn.addEventListener('click', startCalibration);
+calResetBtn.addEventListener('click', () => {
+  resetCalibration(store, 'sing');
+  resetCalibration(store, 'play');
+  saveCalibrationProfile({ sing: null, play: null }).catch(() => null);
+  cal = { phase: 'idle', sing: null, piano: null, lastNeedle: 0 };
+  calStartBtn.querySelector('small').textContent = '一步步完成校准';
+  renderSyllables();
+  renderPianoResult();
+});
+calDoneBtn.addEventListener('click', () => go('home'));
+
+const calibrationScreen = {
+  enter() {
+    cal = { phase: 'idle', sing: null, piano: null, lastNeedle: 0 };
+    calEnvPill.textContent = engine.isReady() ? '麦克风已就绪' : '等待麦克风';
+    renderSyllables();
+    renderPianoResult();
+  },
+  frame: calibrationFrame
+};
+
+// ================================================================ GAME =======
 const canvas = document.querySelector('#game-canvas');
 const ctx = canvas.getContext('2d');
 const inputPad = document.querySelector('#input-pad');
-const modeButtons = {
-  sing: document.querySelector('#mode-sing'),
-  play: document.querySelector('#mode-play')
-};
-const calibrationStatus = document.querySelector('#calibration-status');
-const calibrationCopy = document.querySelector('#calibration-copy');
-const calibrateButton = document.querySelector('#calibrate');
-const resetCalibrationButton = document.querySelector('#reset-calibration');
-const enableAudioButton = document.querySelector('#enable-audio');
-const audioStatus = document.querySelector('#audio-status');
-const environmentStatus = document.querySelector('#environment-status');
-const levelMeter = document.querySelector('#level-meter');
-const detectedNote = document.querySelector('#detected-note');
-const detectedCents = document.querySelector('#detected-cents');
 const scoreEl = document.querySelector('#score');
 const streakEl = document.querySelector('#streak');
 const progressEl = document.querySelector('#progress');
 const feedbackEl = document.querySelector('#feedback');
-const restartButton = document.querySelector('#restart');
-const playbackButton = document.querySelector('#playback');
-const playArea = document.querySelector('.play-area');
-const stageModeLabel = document.querySelector('#stage-mode-label');
-const stagePrompt = document.querySelector('#stage-prompt');
-const singCalibrationGrid = document.querySelector('#sing-calibration-grid');
-const pianoCalibrationCard = document.querySelector('#piano-calibration-card');
-const pitchNeedle = document.querySelector('#pitch-needle');
-const pianoCalibrationResult = document.querySelector('#piano-calibration-result');
+const detectedNote = document.querySelector('#detected-note');
+const detectedCents = document.querySelector('#detected-cents');
+const gameLevel = document.querySelector('#game-level');
+const hudTitle = document.querySelector('#hud-title');
+const hudSub = document.querySelector('#hud-sub');
+const gameMicBtn = document.querySelector('#game-mic');
+const replayBtn = document.querySelector('#replay-btn');
 
-const calibrationStore = createBrowserCalibrationStore();
 let mode = 'sing';
 let game = createGame({ mode });
-let audioContext = null;
-let microphoneReady = false;
 let elapsed = 0;
 let burstTimer = 0;
 let playbackTimer = 0;
 let playbackEvents = [];
 let nextPlaybackIndex = 0;
-let mediaStream = null;
-let analyser = null;
-let timeDomainBuffer = null;
-let liveAudio = {
-  frequency: null,
-  midi: null,
-  rms: 0,
-  confidence: 0,
-  environment: { status: 'quiet', label: '等待麦克风', score: 0 },
-  centsFromTarget: null,
-  mfcc: null,
-  mfccFrameId: 0
-};
-let calibrationSession = null;
 let audioJudgeCooldown = 0;
-let mfccTimer = 0;
-let mfccFrameId = 0;
-let liveMfccSequence = [];
+let liveCents = null;
 
-openProfileDatabase().catch(() => null);
+const HUD_COPY = {
+  sing: { title: '请唱出气球里的音符', sub: '唱对后，音符会飞上去填在乐谱上哦！' },
+  play: { title: '看气球里的音符，在钢琴上弹出它！', sub: '弹对后，音符会飞上去填在乐谱上哦！' }
+};
 
-function setMode(nextMode) {
+function startGame(nextMode) {
   mode = nextMode;
   game = createGame({ mode });
   elapsed = 0;
@@ -95,449 +284,25 @@ function setMode(nextMode) {
   playbackTimer = 0;
   playbackEvents = [];
   nextPlaybackIndex = 0;
-  updateModeButtons();
-  renderCalibrationStage();
+  liveCents = null;
+  hudTitle.textContent = HUD_COPY[mode].title;
+  hudSub.textContent = HUD_COPY[mode].sub;
   renderInputPad();
-  updateHud();
-}
-
-function updateModeButtons() {
-  for (const [id, button] of Object.entries(modeButtons)) {
-    const active = id === mode;
-    button.classList.toggle('active', active);
-    button.setAttribute('aria-selected', String(active));
-  }
-  playArea.classList.toggle('mode-sing', mode === 'sing');
-  playArea.classList.toggle('mode-play', mode === 'play');
-}
-
-function handleCalibration() {
-  if (!microphoneReady) {
-    applyDemoCalibration();
-    game.feedback = '还未打开麦克风，已先启用演示校准；点击“打开麦克风”可做真实校准';
-    updateHud();
-    return;
-  }
-  calibrationSession = mode === 'sing'
-    ? { mode, stepIndex: 0, stepElapsed: 0, samples: [], templates: [] }
-    : { mode, elapsed: 0, samples: [] };
-  game.feedback = mode === 'sing' ? '请跟着高亮音名唱，保持声音稳定' : '请弹中央 C，按住 2 到 3 秒';
-  renderCalibrationStage();
-  updateHud();
-}
-
-function handleResetCalibration() {
-  resetCalibration(calibrationStore, mode);
-  updateHud();
-}
-
-async function enableAudio() {
-  audioContext ??= new AudioContext();
-  try {
-    await audioContext.resume();
-    if (navigator.mediaDevices?.getUserMedia) {
-      mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false
-        }
-      });
-      analyser = audioContext.createAnalyser();
-      analyser.fftSize = 4096;
-      audioContext.createMediaStreamSource(mediaStream).connect(analyser);
-      timeDomainBuffer = new Float32Array(analyser.fftSize);
-    }
-    microphoneReady = true;
-    audioStatus.textContent = '已授权，正在监听';
-  } catch {
-    microphoneReady = false;
-    audioStatus.textContent = '未授权，可先用模拟按钮';
-  }
+  updateGameHud();
 }
 
 function handleInput(option) {
-  const payload = mode === 'sing'
-    ? { mode, solfege: option.value }
-    : { mode, midi: option.value };
+  const payload = mode === 'sing' ? { mode, solfege: option.value } : { mode, midi: option.value };
   const result = submitInput(game, payload);
   if (result.correct) {
     burstTimer = 0.7;
-    playTone(result.target.midi, 0.16);
-    if (game.phase === 'playback') {
-      startPlayback();
-    }
+    engine.playTone(result.target.midi, 0.16);
+    if (game.phase === 'playback') startPlayback();
+    renderInputPad();
   } else {
-    playTone(48, 0.04);
+    engine.playTone(48, 0.05);
   }
-  updateHud();
-}
-
-function applyDemoCalibration() {
-  if (mode === 'sing') {
-    const templates = SOLFEGE.map((solfege, index) => ({
-      solfege,
-      completed: true,
-      frequency: midiToFrequency(60 + [0, 2, 4, 5, 7, 9, 11][index]),
-      midi: 60 + [0, 2, 4, 5, 7, 9, 11][index],
-      confidence: 1,
-      samples: 1
-    }));
-    submitCalibration(calibrationStore, 'sing', { syllables: SOLFEGE, templates, profileName: '小朋友' });
-  } else {
-    submitCalibration(calibrationStore, 'play', { centralCOffsetCents: 0, referenceMidi: 60 });
-  }
-  renderCalibrationStage();
-}
-
-function startPlayback() {
-  game.phase = 'playback';
-  playbackEvents = getPlaybackEvents(game);
-  playbackTimer = 0;
-  nextPlaybackIndex = 0;
-  game.feedback = '全曲回放中';
-  updateHud();
-}
-
-function restart() {
-  game = createGame({ mode });
-  elapsed = 0;
-  burstTimer = 0;
-  playbackTimer = 0;
-  nextPlaybackIndex = 0;
-  playbackEvents = [];
-  renderInputPad();
-  updateHud();
-}
-
-function playTone(midi, gainValue = 0.1) {
-  if (!audioContext) return;
-  const frequency = 440 * (2 ** ((midi - 69) / 12));
-  const oscillator = audioContext.createOscillator();
-  const gain = audioContext.createGain();
-  oscillator.type = 'sine';
-  oscillator.frequency.value = frequency;
-  gain.gain.setValueAtTime(gainValue, audioContext.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.45);
-  oscillator.connect(gain);
-  gain.connect(audioContext.destination);
-  oscillator.start();
-  oscillator.stop(audioContext.currentTime + 0.45);
-}
-
-function update(dt) {
-  elapsed += dt;
-  audioJudgeCooldown = Math.max(0, audioJudgeCooldown - dt);
-  updateLiveAudio(dt);
-  if (game.phase === 'burst') {
-    burstTimer -= dt;
-    if (burstTimer <= 0) {
-      settleBurst(game);
-      renderInputPad();
-    }
-  }
-
-  if (game.phase === 'playback' && playbackEvents.length > 0) {
-    playbackTimer += dt * 1000;
-    while (nextPlaybackIndex < playbackEvents.length && playbackTimer >= playbackEvents[nextPlaybackIndex].at) {
-      playTone(playbackEvents[nextPlaybackIndex].midi, 0.08);
-      nextPlaybackIndex += 1;
-    }
-    if (nextPlaybackIndex >= playbackEvents.length) {
-      game.feedback = '回放完成，可以再玩一次';
-    }
-  }
-}
-
-function updateLiveAudio(dt) {
-  if (!analyser || !timeDomainBuffer) return;
-  analyser.getFloatTimeDomainData(timeDomainBuffer);
-  const detected = detectPitchFromTimeDomain(timeDomainBuffer, audioContext.sampleRate);
-  mfccTimer -= dt;
-  let mfcc = liveAudio.mfcc;
-  if (mfccTimer <= 0) {
-    mfccTimer = 0.12;
-    mfcc = extractMfcc(timeDomainBuffer, audioContext.sampleRate);
-    mfccFrameId += 1;
-    liveMfccSequence.push(mfcc);
-    if (liveMfccSequence.length > 18) {
-      liveMfccSequence = liveMfccSequence.slice(-18);
-    }
-  }
-  liveAudio = {
-    ...liveAudio,
-    ...detected,
-    midi: frequencyToMidi(detected.frequency),
-    environment: classifyEnvironment(detected),
-    mfcc,
-    mfccFrameId
-  };
-  handleActiveCalibration(dt);
-  maybeJudgeLiveAudio();
-}
-
-function handleActiveCalibration(dt) {
-  if (!calibrationSession) return;
-  if (calibrationSession.mode === 'sing') {
-    const solfege = SOLFEGE[calibrationSession.stepIndex];
-    calibrationSession.stepElapsed += dt;
-    if (
-      liveAudio.mfcc
-      && liveAudio.mfccFrameId !== calibrationSession.lastMfccFrameId
-      && liveAudio.rms >= 0.015
-    ) {
-      calibrationSession.lastMfccFrameId = liveAudio.mfccFrameId;
-      calibrationSession.samples.push({
-        frequency: liveAudio.frequency,
-        rms: liveAudio.rms,
-        confidence: liveAudio.confidence,
-        mfcc: liveAudio.mfcc
-      });
-    }
-    if (calibrationSession.stepElapsed >= 1.05 && calibrationSession.samples.length >= 12) {
-      calibrationSession.templates.push(buildSingingTemplate(solfege, calibrationSession.samples));
-      calibrationSession.stepIndex += 1;
-      calibrationSession.stepElapsed = 0;
-      calibrationSession.samples = [];
-      if (calibrationSession.stepIndex >= SOLFEGE.length) {
-        submitCalibration(calibrationStore, 'sing', {
-          syllables: SOLFEGE,
-          templates: calibrationSession.templates,
-          profileName: '小朋友'
-        });
-        calibrationSession = null;
-        game.feedback = '唱谱校准完成，可以对着气球唱音名';
-      }
-    }
-    renderCalibrationStage();
-  } else {
-    calibrationSession.elapsed += dt;
-    if (liveAudio.frequency && liveAudio.confidence >= 0.52 && liveAudio.rms >= 0.012) {
-      calibrationSession.samples.push(liveAudio.frequency);
-    }
-    if (calibrationSession.elapsed >= 1.6 && calibrationSession.samples.length >= 16) {
-      const averageFrequency = calibrationSession.samples.reduce((sum, value) => sum + value, 0) / calibrationSession.samples.length;
-      const centralCOffsetCents = Math.round(centsBetween(midiToFrequency(60), averageFrequency));
-      submitCalibration(calibrationStore, 'play', {
-        centralCOffsetCents,
-        referenceMidi: 60,
-        referenceFrequency: averageFrequency
-      });
-      calibrationSession = null;
-      game.feedback = '中央 C 校准完成，弹对当前气球就会发射音符';
-      const target = getCurrentTarget(game);
-      if (target?.midi === 60) {
-        submitInput(game, { mode: 'play', midi: 60 });
-        burstTimer = 0.7;
-      }
-    }
-    renderCalibrationStage();
-  }
-}
-
-function maybeJudgeLiveAudio() {
-  if (!microphoneReady || calibrationSession || audioJudgeCooldown > 0 || game.phase !== 'aiming') return;
-  const target = getCurrentTarget(game);
-  if (!target || !liveAudio.frequency || liveAudio.confidence < 0.56 || liveAudio.rms < 0.014) return;
-  const calibration = loadCalibrationState(calibrationStore, mode);
-  if (!calibration.completed) return;
-
-  if (mode === 'sing') {
-    const templates = calibration.templates ?? [];
-    const match = matchSingingTemplate({
-      detectedFrequency: liveAudio.frequency,
-      detectedMfccSequence: liveMfccSequence.slice(-10),
-      templates,
-      toleranceCents: 140,
-      tolerance: 24
-    });
-    if (match.correct && match.solfege === target.solfege) {
-      const result = submitInput(game, { mode: 'sing', solfege: target.solfege });
-      handleAudioHit(result);
-    } else if (match.correct && match.solfege && match.solfege !== target.solfege) {
-      submitInput(game, { mode: 'sing', solfege: match.solfege });
-      audioJudgeCooldown = 1.1;
-    }
-    liveAudio.centsFromTarget = match.cents;
-  } else {
-    const match = matchDetectedPitch({
-      targetMidi: target.midi,
-      detectedFrequency: liveAudio.frequency,
-      centralCOffsetCents: calibration.centralCOffsetCents,
-      toleranceCents: 55
-    });
-    liveAudio.centsFromTarget = match.cents;
-    if (match.correct) {
-      const result = submitInput(game, { mode: 'play', midi: target.midi });
-      handleAudioHit(result);
-    } else if (Math.abs(match.cents) > 90) {
-      submitInput(game, { mode: 'play', midi: match.midi });
-      audioJudgeCooldown = 1.1;
-    }
-  }
-}
-
-function handleAudioHit(result) {
-  if (!result.correct) return;
-  burstTimer = 0.7;
-  audioJudgeCooldown = 0.95;
-  playTone(result.target.midi, 0.16);
-  if (game.phase === 'playback') startPlayback();
-  renderInputPad();
-}
-
-function draw() {
-  resizeCanvas();
-  const width = canvas.clientWidth;
-  const height = canvas.clientHeight;
-  ctx.clearRect(0, 0, width, height);
-  drawRoom(width, height);
-  drawStaff(width, height);
-  drawPlacedNotes(width);
-  drawBalloon(width, height);
-  drawLauncher(width, height);
-  drawMistakes(width);
-}
-
-function drawRoom(width, height) {
-  const gradient = ctx.createLinearGradient(0, 0, width, height);
-  gradient.addColorStop(0, '#fff8df');
-  gradient.addColorStop(0.48, '#e9f8ff');
-  gradient.addColorStop(1, '#fff0f6');
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, width, height);
-
-  ctx.fillStyle = 'rgba(255, 210, 92, 0.18)';
-  ctx.beginPath();
-  ctx.arc(width * 0.13, height * 0.18, 120, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = 'rgba(74, 141, 246, 0.12)';
-  ctx.beginPath();
-  ctx.arc(width * 0.82, height * 0.16, 150, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-function drawStaff(width) {
-  const x = width * 0.11;
-  const staffWidth = width * 0.74;
-  const top = 178;
-  ctx.strokeStyle = '#26324a';
-  ctx.lineWidth = 2;
-  for (let line = 0; line < 5; line += 1) {
-    const y = top + line * 28;
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + staffWidth, y);
-    ctx.stroke();
-  }
-  ctx.font = '800 28px ui-rounded, system-ui';
-  ctx.fillStyle = '#26324a';
-  ctx.fillText('𝄞', x - 54, top + 86);
-}
-
-function drawPlacedNotes(width) {
-  const startX = width * 0.2;
-  const gap = 68;
-  for (const [index, songNote] of game.placedNotes.entries()) {
-    const x = startX + index * gap;
-    const y = staffYForNote(songNote);
-    drawNoteHead(x, y, '#4a8df6');
-    ctx.fillStyle = '#26324a';
-    ctx.font = '800 17px ui-rounded, system-ui';
-    ctx.fillText(songNote.solfege, x - 16, y + 38);
-  }
-}
-
-function drawBalloon(width, height) {
-  if (!game.balloon) return;
-  const target = getCurrentTarget(game) ?? game.placedNotes.at(-1);
-  const bob = Math.sin(elapsed * 2.8) * 10;
-  const x = width * 0.68;
-  const y = height * 0.44 + bob;
-  const placed = game.balloon.state === 'placed';
-  ctx.fillStyle = placed ? 'rgba(255, 138, 160, 0.25)' : '#ff8aa0';
-  ctx.beginPath();
-  ctx.ellipse(x, y, 70, 84, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = '#c9546d';
-  ctx.lineWidth = 3;
-  ctx.stroke();
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '950 42px ui-rounded, system-ui';
-  ctx.textAlign = 'center';
-  ctx.fillText(target?.solfege ?? '', x, y + 12);
-  ctx.textAlign = 'start';
-  ctx.strokeStyle = '#8d6670';
-  ctx.beginPath();
-  ctx.moveTo(x, y + 84);
-  ctx.quadraticCurveTo(x - 20, y + 126, x + 8, y + 164);
-  ctx.stroke();
-
-  if (placed) {
-    ctx.fillStyle = '#ffd25c';
-    ctx.font = '900 26px ui-rounded, system-ui';
-    ctx.fillText('啪！', x + 78, y - 40);
-  }
-}
-
-function drawLauncher(width, height) {
-  const x = width * 0.18;
-  const y = height * 0.72;
-  ctx.fillStyle = '#ffffff';
-  ctx.strokeStyle = '#26324a';
-  ctx.lineWidth = 3;
-  roundedRect(x - 74, y - 34, 148, 68, 18);
-  ctx.fill();
-  ctx.stroke();
-  ctx.fillStyle = '#4a8df6';
-  ctx.font = '900 24px ui-rounded, system-ui';
-  ctx.textAlign = 'center';
-  ctx.fillText('发射音符', x, y + 8);
-  ctx.textAlign = 'start';
-
-  if (game.projectile?.state === 'arrived') {
-    const note = game.placedNotes.at(-1);
-    const targetX = width * 0.2 + (game.placedNotes.length - 1) * 68;
-    drawNoteHead(targetX, staffYForNote(note), '#ffd25c');
-  }
-}
-
-function drawMistakes(width) {
-  if (game.mistakes.length === 0) return;
-  ctx.fillStyle = '#9a4b5b';
-  ctx.font = '800 18px ui-rounded, system-ui';
-  ctx.fillText(`温柔提示：已经尝试 ${game.mistakes.length} 次`, width * 0.1, 48);
-}
-
-function drawNoteHead(x, y, color) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(-0.32);
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.ellipse(0, 0, 18, 13, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-  ctx.strokeStyle = '#26324a';
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(x + 15, y - 8);
-  ctx.lineTo(x + 15, y - 70);
-  ctx.stroke();
-}
-
-function roundedRect(x, y, width, height, radius) {
-  ctx.beginPath();
-  ctx.moveTo(x + radius, y);
-  ctx.lineTo(x + width - radius, y);
-  ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
-  ctx.lineTo(x + width, y + height - radius);
-  ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
-  ctx.lineTo(x + radius, y + height);
-  ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
-  ctx.lineTo(x, y + radius);
-  ctx.quadraticCurveTo(x, y, x + radius, y);
+  updateGameHud();
 }
 
 function renderInputPad() {
@@ -558,67 +323,102 @@ function renderInputPad() {
   }
 }
 
-function renderCalibrationStage() {
-  const calibration = loadCalibrationState(calibrationStore, mode);
-  stageModeLabel.textContent = mode === 'sing' ? '唱谱校准' : '钢琴校准';
-  playArea.classList.toggle('mode-sing', mode === 'sing');
-  playArea.classList.toggle('mode-play', mode === 'play');
+function startPlayback() {
+  game.phase = 'playback';
+  playbackEvents = getPlaybackEvents(game);
+  playbackTimer = 0;
+  nextPlaybackIndex = 0;
+  game.feedback = '全曲回放中';
+  renderInputPad();
+}
+
+function judgeLiveAudio(live) {
+  if (!engine.isReady() || audioJudgeCooldown > 0 || game.phase !== 'aiming') return;
+  const target = getCurrentTarget(game);
+  if (!target || !live.frequency || live.confidence < 0.56 || live.rms < 0.014) return;
+  const calibration = loadCalibrationState(store, mode);
+  if (!calibration.completed) return;
 
   if (mode === 'sing') {
-    const activeIndex = calibrationSession?.mode === 'sing' ? calibrationSession.stepIndex : -1;
-    const templates = calibration.templates ?? [];
-    stagePrompt.textContent = calibrationSession?.mode === 'sing'
-      ? `请唱 ${SOLFEGE[activeIndex]}，保持 1 秒`
-      : calibration.completed
-        ? '唱谱模板已完成，对着气球唱音名即可'
-        : '请打开麦克风后，依次唱 Do Re Mi Fa Sol La Si，系统会提取 MFCC 模板';
-    singCalibrationGrid.innerHTML = '';
-    for (const [index, solfege] of SOLFEGE.entries()) {
-      const done = templates.some((template) => template.solfege === solfege && template.completed)
-        || (calibrationSession?.mode === 'sing' && index < calibrationSession.stepIndex);
-      const card = document.createElement('div');
-      card.className = 'syllable-card';
-      card.classList.toggle('active', index === activeIndex);
-      card.classList.toggle('done', done);
-      card.innerHTML = `
-        <strong>${solfege}</strong>
-        <div class="wave-mini" aria-hidden="true"></div>
-        <span>${done ? '已识别' : index === activeIndex ? '录音中' : '待录入'}</span>
-      `;
-      singCalibrationGrid.append(card);
+    const match = matchSingingTemplate({
+      detectedFrequency: live.frequency,
+      detectedMfccSequence: live.mfccSequence.slice(-10),
+      templates: calibration.templates ?? [],
+      toleranceCents: 140,
+      tolerance: 24
+    });
+    liveCents = match.cents ?? null;
+    if (match.correct && match.solfege === target.solfege) {
+      registerAudioHit(submitInput(game, { mode: 'sing', solfege: target.solfege }));
+    } else if (match.correct && match.solfege) {
+      submitInput(game, { mode: 'sing', solfege: match.solfege });
+      audioJudgeCooldown = 1.1;
+      updateGameHud();
     }
   } else {
-    const offset = calibration.centralCOffsetCents ?? 0;
-    const clamped = Math.max(-50, Math.min(50, offset));
-    pitchNeedle.style.transform = `translateX(-50%) rotate(${clamped * 0.75}deg)`;
-    stagePrompt.textContent = calibrationSession?.mode === 'play'
-      ? '请弹钢琴上的中央 C，按住 2 到 3 秒'
-      : calibration.completed
-        ? '中央 C 已校准，弹当前气球对应琴键'
-        : '请打开麦克风后弹中央 C 完成校准';
-    pianoCalibrationResult.textContent = calibration.completed
-      ? `音准良好，偏移 ${offset} cents`
-      : '等待中央 C';
+    const match = matchDetectedPitch({
+      targetMidi: target.midi,
+      detectedFrequency: live.frequency,
+      centralCOffsetCents: calibration.centralCOffsetCents,
+      toleranceCents: 55
+    });
+    liveCents = match.cents;
+    if (match.correct) {
+      registerAudioHit(submitInput(game, { mode: 'play', midi: target.midi }));
+    } else if (Math.abs(match.cents) > 90) {
+      submitInput(game, { mode: 'play', midi: match.midi });
+      audioJudgeCooldown = 1.1;
+      updateGameHud();
+    }
   }
 }
 
-function updateHud() {
-  const calibration = loadCalibrationState(calibrationStore, mode);
-  calibrationStatus.textContent = calibration.completed ? '已校准' : '未校准';
-  calibrationCopy.textContent = mode === 'sing'
-    ? '打开麦克风后依次唱 7 个音名，系统会保存本地 MFCC 模板并用 DTW 匹配。'
-    : '打开麦克风后弹中央 C，系统会匹配这台钢琴的音准。';
-  environmentStatus.textContent = liveAudio.environment.label;
-  levelMeter.style.width = `${Math.min(100, Math.round(liveAudio.rms * 620))}%`;
-  detectedNote.textContent = liveAudio.midi ? midiName(liveAudio.midi) : '--';
-  detectedCents.textContent = Number.isFinite(liveAudio.centsFromTarget)
-    ? `${liveAudio.centsFromTarget > 0 ? '+' : ''}${Math.round(liveAudio.centsFromTarget)} cents`
-    : '--';
+function registerAudioHit(result) {
+  if (!result.correct) return;
+  burstTimer = 0.7;
+  audioJudgeCooldown = 0.95;
+  engine.playTone(result.target.midi, 0.16);
+  if (game.phase === 'playback') startPlayback();
+  renderInputPad();
+  updateGameHud();
+}
+
+function gameFrame(dt, live) {
+  elapsed += dt;
+  audioJudgeCooldown = Math.max(0, audioJudgeCooldown - dt);
+
+  if (game.phase === 'burst') {
+    burstTimer -= dt;
+    if (burstTimer <= 0) {
+      settleBurst(game);
+      renderInputPad();
+    }
+  }
+  if (game.phase === 'playback' && playbackEvents.length > 0) {
+    playbackTimer += dt * 1000;
+    while (nextPlaybackIndex < playbackEvents.length && playbackTimer >= playbackEvents[nextPlaybackIndex].at) {
+      engine.playTone(playbackEvents[nextPlaybackIndex].midi, 0.08);
+      nextPlaybackIndex += 1;
+    }
+    if (nextPlaybackIndex >= playbackEvents.length) game.feedback = '回放完成，可以再玩一次';
+  }
+
+  judgeLiveAudio(live);
+  draw();
+  updateGameHud(live);
+}
+
+function updateGameHud(live = engine.getLive()) {
+  gameMicBtn.classList.toggle('live', engine.isReady());
+  gameLevel.style.width = `${Math.min(100, Math.round(live.rms * 620))}%`;
+  detectedNote.textContent = live.midi ? midiName(live.midi) : '--';
+  detectedCents.textContent = Number.isFinite(liveCents)
+    ? `${liveCents > 0 ? '+' : ''}${Math.round(liveCents)} cents`
+    : '';
   scoreEl.textContent = String(game.score);
   streakEl.textContent = String(game.streak);
   progressEl.textContent = `${game.placedNotes.length} / ${game.song.notes.length}`;
   feedbackEl.textContent = game.feedback;
-  renderCalibrationStage();
 }
 
 function midiName(midi) {
@@ -626,65 +426,233 @@ function midiName(midi) {
   return `${names[midi % 12]}${Math.floor(midi / 12) - 1}`;
 }
 
+// ----- canvas drawing -----
 function resizeCanvas() {
   const rect = canvas.getBoundingClientRect();
   const ratio = window.devicePixelRatio || 1;
-  canvas.width = Math.floor(rect.width * ratio);
-  canvas.height = Math.floor(rect.height * ratio);
+  const width = Math.max(1, Math.floor(rect.width * ratio));
+  const height = Math.max(1, Math.floor(rect.height * ratio));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+}
+
+function draw() {
+  resizeCanvas();
+  const width = canvas.clientWidth || 1080;
+  const height = canvas.clientHeight || 720;
+  ctx.clearRect(0, 0, width, height);
+  drawStaff(width, height);
+  drawPlacedNotes(width, height);
+  drawBalloon(width, height);
+  drawLauncher(width, height);
+  drawMistakes(width, height);
+}
+
+function staffTop(height) { return height * 0.16; }
+function staffGap(height) { return Math.max(20, height * 0.05); }
+
+function drawStaff(width, height) {
+  const x = width * 0.1;
+  const staffWidth = width * 0.8;
+  const top = staffTop(height);
+  const gap = staffGap(height);
+  ctx.strokeStyle = '#3a4a63';
+  ctx.lineWidth = 2;
+  for (let line = 0; line < 5; line += 1) {
+    const y = top + line * gap;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + staffWidth, y);
+    ctx.stroke();
+  }
+  ctx.font = `900 ${gap * 3.2}px ui-rounded, system-ui`;
+  ctx.fillStyle = '#3a4a63';
+  ctx.fillText('𝄞', x - gap * 1.8, top + gap * 3.1);
+}
+
+function noteY(height, songNote) {
+  const top = staffTop(height);
+  const gap = staffGap(height);
+  return top + gap * 4 - songNote.staffStep * (gap * 0.5);
+}
+
+function drawPlacedNotes(width, height) {
+  const startX = width * 0.2;
+  const span = width * 0.6;
+  const gap = span / Math.max(1, game.song.notes.length - 1);
+  for (const [index, songNote] of game.placedNotes.entries()) {
+    const x = startX + index * gap;
+    drawNoteHead(x, noteY(height, songNote), staffGap(height), '#3f8de0');
+    ctx.fillStyle = '#3a4a63';
+    ctx.font = '800 15px ui-rounded, system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText(songNote.solfege, x, noteY(height, songNote) + staffGap(height) * 1.7);
+    ctx.textAlign = 'start';
+  }
+}
+
+function drawBalloon(width, height) {
+  if (!game.balloon) return;
+  const target = getCurrentTarget(game) ?? game.placedNotes.at(-1);
+  const bob = Math.sin(elapsed * 2.8) * 10;
+  const x = width * 0.6;
+  const y = height * 0.56 + bob;
+  const rx = Math.min(78, width * 0.07);
+  const ry = rx * 1.16;
+  const placed = game.balloon.state === 'placed';
+  ctx.fillStyle = placed ? 'rgba(155, 120, 214, 0.3)' : '#9b6cd6';
+  ctx.beginPath();
+  ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#7a4fc0';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `900 ${rx * 0.62}px ui-rounded, system-ui`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(target?.solfege ?? '', x, y);
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'start';
+  ctx.strokeStyle = '#b69be0';
+  ctx.beginPath();
+  ctx.moveTo(x, y + ry);
+  ctx.quadraticCurveTo(x - 20, y + ry + 42, x + 8, y + ry + 84);
+  ctx.stroke();
+}
+
+function drawLauncher(width, height) {
+  const x = width * 0.16;
+  const y = height * 0.78;
+  ctx.save();
+  ctx.fillStyle = '#3f8de0';
+  ctx.strokeStyle = '#2b3a4f';
+  ctx.lineWidth = 3;
+  ctx.translate(x, y);
+  ctx.rotate(-0.5);
+  roundedRect(-26, -30, 96, 60, 16);
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+  ctx.fillStyle = '#f6b93b';
+  ctx.beginPath();
+  ctx.arc(x, y, 16, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawMistakes(width, height) {
+  if (game.mistakes.length === 0) return;
+  ctx.fillStyle = '#b06b54';
+  ctx.font = '800 16px ui-rounded, system-ui';
+  ctx.fillText(`温柔提示：已经尝试 ${game.mistakes.length} 次`, width * 0.1, height * 0.07);
+}
+
+function drawNoteHead(x, y, gap, color) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(-0.32);
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, gap * 0.62, gap * 0.46, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = '#2b3a4f';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(x + gap * 0.55, y - gap * 0.3);
+  ctx.lineTo(x + gap * 0.55, y - gap * 2.4);
+  ctx.stroke();
+}
+
+function roundedRect(x, y, width, height, radius) {
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + width - radius, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+  ctx.lineTo(x + width, y + height - radius);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+  ctx.lineTo(x + radius, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
+}
+
+gameMicBtn.addEventListener('click', () => engine.enable());
+replayBtn.addEventListener('click', startPlayback);
+
+const gameScreen = {
+  async enter({ mode: nextMode = 'sing' } = {}) {
+    startGame(nextMode);
+    draw();
+    if (!engine.isReady()) await engine.enable();
+  },
+  frame: gameFrame
+};
+
+// ============================================================== screens =====
+const screens = {
+  home: homeScreen,
+  calibration: calibrationScreen,
+  game: gameScreen
+};
+
+// ============================================================= main loop ====
+function stepFrame(dt) {
+  const live = engine.pull(dt);
+  screens[current]?.frame?.(dt, live);
 }
 
 function tick(now) {
   if (!tick.last) tick.last = now;
   const dt = Math.min(0.05, (now - tick.last) / 1000);
   tick.last = now;
-  update(dt);
-  draw();
-  updateHud();
+  stepFrame(dt);
   requestAnimationFrame(tick);
 }
 
+window.addEventListener('resize', () => { if (current === 'game') draw(); });
+
+// ------------------------------------------------------------- test hooks ---
+window.advanceTime = (ms) => {
+  const steps = Math.max(1, Math.round(ms / 16.67));
+  for (let index = 0; index < steps; index += 1) stepFrame(1 / 60);
+};
+window.__go = (screen, opts) => go(screen, opts);
 window.render_game_to_text = () => JSON.stringify({
-  coordinateSystem: 'canvas origin top-left, x right, y down',
+  screen: current,
   mode,
   phase: game.phase,
   target: getCurrentTarget(game),
   score: game.score,
   streak: game.streak,
-  placedNotes: game.placedNotes.map((note) => ({ id: note.id, solfege: note.solfege, midi: note.midi })),
+  placedNotes: game.placedNotes.map((n) => ({ id: n.id, solfege: n.solfege, midi: n.midi })),
   mistakes: game.mistakes.length,
-  calibration: loadCalibrationState(calibrationStore, mode).completed,
-  microphoneReady,
-  liveAudio: {
-    midi: liveAudio.midi,
-    frequency: liveAudio.frequency,
-    rms: liveAudio.rms,
-    confidence: liveAudio.confidence,
-    environment: liveAudio.environment.status,
-    mfccFrames: liveMfccSequence.length
+  calibration: {
+    sing: loadCalibrationState(store, 'sing').completed,
+    play: loadCalibrationState(store, 'play').completed
   },
-  calibrationSession: calibrationSession
-    ? { mode: calibrationSession.mode, stepIndex: calibrationSession.stepIndex ?? null }
-    : null
+  microphoneReady: engine.isReady(),
+  calPhase: cal.phase
 });
-
-window.advanceTime = (ms) => {
-  const steps = Math.max(1, Math.round(ms / 16.67));
-  for (let index = 0; index < steps; index += 1) update(1 / 60);
-  draw();
-  updateHud();
+// Deterministic calibration record for headless smoke tests (no real mic).
+window.__demoCalibrate = () => {
+  const templates = SOLFEGE.map((solfege, index) => ({
+    solfege,
+    completed: true,
+    midi: SOLFEGE_MIDI[index],
+    frequency: midiToFrequency(SOLFEGE_MIDI[index]),
+    mfccSequence: [[index, 1, 0.5], [index + 0.1, 1, 0.5]],
+    samples: 12
+  }));
+  persistSingCalibration(store, templates, '小朋友');
+  persistPianoCalibration(store, { centralCOffsetCents: 0, referenceMidi: 60, referenceFrequency: midiToFrequency(60) });
+  renderSyllables();
+  renderPianoResult();
+  refreshHomePills();
 };
 
-modeButtons.sing.addEventListener('click', () => setMode('sing'));
-modeButtons.play.addEventListener('click', () => setMode('play'));
-calibrateButton.addEventListener('click', handleCalibration);
-resetCalibrationButton.addEventListener('click', handleResetCalibration);
-enableAudioButton.addEventListener('click', enableAudio);
-restartButton.addEventListener('click', restart);
-playbackButton.addEventListener('click', startPlayback);
-window.addEventListener('resize', resizeCanvas);
-
-updateModeButtons();
-renderInputPad();
-updateHud();
+refreshHomePills();
 requestAnimationFrame(tick);

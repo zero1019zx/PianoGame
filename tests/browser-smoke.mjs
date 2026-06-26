@@ -16,16 +16,36 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
 
 try {
   await page.goto(baseUrl, { waitUntil: 'networkidle' });
-  await page.getByRole('button', { name: '开始校准' }).click();
+
+  // Home shows the three feature entries.
+  await assert.ok(await page.getByRole('button', { name: '唱谱模式' }).isVisible());
+  await assert.ok(await page.getByRole('button', { name: '弹奏模式' }).isVisible());
+  await assert.ok(await page.getByRole('button', { name: '声音校准' }).isVisible());
+
+  // Sound-calibration closed loop: open screen, record calibration, return home.
+  await page.getByRole('button', { name: '声音校准' }).click();
+  await page.waitForTimeout(120);
+  await page.evaluate(() => window.__demoCalibrate());
+  await page.getByRole('button', { name: /完成并返回/ }).click();
+  await page.waitForTimeout(120);
+
+  const afterCal = JSON.parse(await page.evaluate(() => window.render_game_to_text()));
+  assert.equal(afterCal.screen, 'home');
+  assert.equal(afterCal.calibration.sing, true, 'singing calibration should be recorded');
+  assert.equal(afterCal.calibration.play, true, 'piano calibration should be recorded');
+
+  // Enter the singing game and place notes via the fallback pad.
+  await page.getByRole('button', { name: '唱谱模式' }).click();
+  await page.waitForTimeout(120);
   await page.getByRole('button', { name: 'Do' }).click();
-  await page.waitForTimeout(150);
+  await page.waitForTimeout(120);
   await page.evaluate(() => window.advanceTime?.(900));
   await page.getByRole('button', { name: 'Re' }).click();
-  await page.waitForTimeout(150);
+  await page.waitForTimeout(120);
 
   const state = JSON.parse(await page.evaluate(() => window.render_game_to_text()));
+  assert.equal(state.screen, 'game');
   assert.equal(state.mode, 'sing');
-  assert.equal(state.calibration, true);
   assert.ok(state.placedNotes.length >= 1, 'at least one note should be placed on the staff');
 
   const canvasHasPixels = await page.evaluate(() => {

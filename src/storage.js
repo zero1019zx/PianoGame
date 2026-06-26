@@ -16,7 +16,7 @@ export function createBrowserCalibrationStore(storage = window.localStorage) {
 }
 
 export async function openProfileDatabase() {
-  if (!('indexedDB' in window)) return null;
+  if (typeof indexedDB === 'undefined') return null;
 
   return new Promise((resolve, reject) => {
     const request = indexedDB.open('notation-mvp-profiles', 1);
@@ -27,6 +27,30 @@ export async function openProfileDatabase() {
       }
     };
     request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+// Durable snapshot of a child's calibration record, kept alongside the fast
+// localStorage cache so later sessions keep the more accurate templates.
+export async function saveCalibrationProfile(profile, id = 'default') {
+  const db = await openProfileDatabase().catch(() => null);
+  if (!db) return null;
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('profiles', 'readwrite');
+    tx.objectStore('profiles').put({ id, ...profile, savedAt: new Date().toISOString() });
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function loadCalibrationProfile(id = 'default') {
+  const db = await openProfileDatabase().catch(() => null);
+  if (!db) return null;
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('profiles', 'readonly');
+    const request = tx.objectStore('profiles').get(id);
+    request.onsuccess = () => resolve(request.result ?? null);
     request.onerror = () => reject(request.error);
   });
 }

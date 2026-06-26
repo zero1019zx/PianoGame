@@ -98,13 +98,17 @@
       <section class="screen screen-game" data-screen="game" hidden>
         <header class="game-hud">
           <button class="round-btn round-home" data-go-home type="button" aria-label="返回首页"></button>
-          <div class="hud-chip"><span>得分</span><strong id="score">0</strong></div>
-          <div class="hud-chip"><span>连击</span><strong id="streak">0</strong></div>
+          <div class="mode-badge" id="mode-badge">
+            <strong id="mode-badge-name">唱谱模式</strong>
+            <span id="mode-badge-sub">说出气球里的音名</span>
+          </div>
+          <div class="hud-chip"><span>⭐ 得分</span><strong id="score">0</strong></div>
+          <div class="hud-chip"><span>⚡ 连击</span><strong id="streak">0</strong></div>
           <div class="hud-instruction">
             <strong id="hud-title">看气球里的音</strong>
             <span id="hud-sub">命中后音符会飞上去填在乐谱上哦！</span>
           </div>
-          <div class="hud-chip"><span>进度</span><strong id="progress">0 / 8</strong></div>
+          <div class="hud-chip"><span>🏆 最高连击</span><strong id="best-streak">0</strong></div>
           <button class="round-btn round-replay" id="replay-btn" type="button" aria-label="回放"></button>
         </header>
 
@@ -112,16 +116,34 @@
           <canvas id="game-canvas" width="1080" height="720"></canvas>
         </div>
 
-        <img id="keyboard-strip" class="keyboard-strip" src="assets/sprites/png/keyboard_reference_strip.png" alt="键盘参考" hidden>
-
-        <div class="game-listen">
-          <button class="listen-mic" id="game-mic" type="button" aria-label="打开麦克风">🎤</button>
-          <div class="listen-meter"><span id="game-level"></span></div>
-          <div class="heard">听到 <strong id="detected-note">--</strong> <small id="detected-cents"></small></div>
-          <span class="feedback" id="feedback">看气球上的音，准备发射音符</span>
+        <div class="listen-panel" id="listen-panel">
+          <button class="listen-icon" id="game-mic" type="button" aria-label="打开麦克风">
+            <span class="ico-sing">🎤</span><span class="ico-play">🎹</span>
+          </button>
+          <div class="listen-wave" id="listen-wave" aria-hidden="true">
+            <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+          </div>
+          <div class="heard-box">
+            <span class="heard-label">听到</span>
+            <strong id="detected-note">--</strong>
+            <small id="detected-cents"></small>
+          </div>
+          <div class="listen-side">
+            <strong class="feedback" id="feedback">看气球上的音，准备发射音符</strong>
+            <span class="listen-status" id="listen-status">当前模式：唱谱模式</span>
+            <div class="play-gauge" aria-hidden="true">
+              <span>低</span>
+              <div class="play-gauge-rail"><i id="play-needle"></i></div>
+              <span>高</span>
+            </div>
+          </div>
         </div>
 
-        <div class="input-pad" id="input-pad"></div>
+        <div class="input-area" id="input-area">
+          <div class="solfege-pad" id="solfege-pad"></div>
+          <div class="piano-pad" id="piano-pad"></div>
+          <button class="hint-btn" id="hint-btn" type="button"><span class="hint-star">★</span>提示</button>
+        </div>
       </section>
     </div>
 

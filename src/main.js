@@ -10,7 +10,6 @@ import {
   getCurrentTarget,
   getPlaybackEvents,
   loadCalibrationState,
-  modeInputOptions,
   resetCalibration,
   settleBurst,
   staffYForNote,
@@ -261,20 +260,32 @@ const calibrationScreen = {
 // ================================================================ GAME =======
 const canvas = document.querySelector('#game-canvas');
 const ctx = canvas.getContext('2d');
-const inputPad = document.querySelector('#input-pad');
+const inputArea = document.querySelector('#input-area');
+const solfegePad = document.querySelector('#solfege-pad');
+const pianoPad = document.querySelector('#piano-pad');
+const hintBtn = document.querySelector('#hint-btn');
 const scoreEl = document.querySelector('#score');
 const streakEl = document.querySelector('#streak');
-const progressEl = document.querySelector('#progress');
+const bestStreakEl = document.querySelector('#best-streak');
 const feedbackEl = document.querySelector('#feedback');
 const detectedNote = document.querySelector('#detected-note');
 const detectedCents = document.querySelector('#detected-cents');
-const gameLevel = document.querySelector('#game-level');
 const hudTitle = document.querySelector('#hud-title');
 const hudSub = document.querySelector('#hud-sub');
+const modeBadgeName = document.querySelector('#mode-badge-name');
+const modeBadgeSub = document.querySelector('#mode-badge-sub');
+const listenStatus = document.querySelector('#listen-status');
+const listenPanel = document.querySelector('#listen-panel');
+const playNeedle = document.querySelector('#play-needle');
 const gameMicBtn = document.querySelector('#game-mic');
 const replayBtn = document.querySelector('#replay-btn');
-const keyboardStrip = document.querySelector('#keyboard-strip');
 const gameScreenEl = document.querySelector('[data-screen="game"]');
+
+const SOLF_COLORS = ['#ef5d52', '#ef8a3b', '#e0a400', '#5bb85f', '#3f8de0', '#9b6cd6', '#e06aa6'];
+const MODE_BADGE = {
+  sing: { name: '唱谱模式', sub: '说出气球里的音名' },
+  play: { name: '弹奏模式', sub: '在钢琴上弹出它' }
+};
 
 let mode = 'sing';
 let game = createGame({ mode });
@@ -286,6 +297,7 @@ let nextPlaybackIndex = 0;
 let audioJudgeCooldown = 0;
 let liveCents = null;
 let wrongFlash = 0;
+let bestStreak = 0;
 let balloonPos = { x: 0, y: 0, rx: 0, ry: 0 };
 
 const HUD_COPY = {
@@ -303,12 +315,15 @@ function startGame(nextMode) {
   nextPlaybackIndex = 0;
   liveCents = null;
   wrongFlash = 0;
+  bestStreak = 0;
   hudTitle.textContent = HUD_COPY[mode].title;
   hudSub.textContent = HUD_COPY[mode].sub;
-  keyboardStrip.hidden = mode !== 'play';
+  modeBadgeName.textContent = MODE_BADGE[mode].name;
+  modeBadgeSub.textContent = MODE_BADGE[mode].sub;
+  listenStatus.textContent = `当前模式：${MODE_BADGE[mode].name}`;
   gameScreenEl.classList.toggle('is-sing', mode === 'sing');
   gameScreenEl.classList.toggle('is-play', mode === 'play');
-  renderInputPad();
+  renderInputs();
   updateGameHud();
 }
 
@@ -319,7 +334,7 @@ function handleInput(option) {
     burstTimer = 0.7;
     engine.playTone(result.target.midi, 0.16);
     if (game.phase === 'playback') startPlayback();
-    renderInputPad();
+    renderInputs();
   } else {
     engine.playTone(48, 0.05);
     wrongFlash = 0.8;
@@ -327,22 +342,61 @@ function handleInput(option) {
   updateGameHud();
 }
 
-function renderInputPad() {
+function renderInputs() {
   const target = getCurrentTarget(game);
-  inputPad.innerHTML = '';
-  if (!target || game.phase === 'playback') {
-    inputPad.hidden = true;
-    return;
-  }
-  inputPad.hidden = false;
-  for (const option of modeInputOptions(mode, target)) {
+  inputArea.hidden = !target || game.phase === 'playback';
+  if (inputArea.hidden) return;
+  renderSolfegePad();
+  renderPianoKeyboard(target);
+}
+
+function renderSolfegePad() {
+  solfegePad.innerHTML = '';
+  SOLFEGE.forEach((solfege, index) => {
     const button = document.createElement('button');
     button.type = 'button';
-    button.textContent = option.label;
-    button.classList.toggle('correct-hint', option.correct);
-    button.addEventListener('click', () => handleInput(option));
-    inputPad.append(button);
+    button.className = 'solfege-btn';
+    button.dataset.solf = solfege;
+    button.style.setProperty('--c', SOLF_COLORS[index]);
+    button.innerHTML = `<b>${solfege}</b><small>(${SOLFEGE_KEYS[index]})</small>`;
+    button.addEventListener('click', () => handleInput({ value: solfege }));
+    solfegePad.append(button);
+  });
+}
+
+function renderPianoKeyboard(target = getCurrentTarget(game)) {
+  pianoPad.innerHTML = '';
+  const keys = document.createElement('div');
+  keys.className = 'piano-keys';
+  SOLFEGE_MIDI.forEach((midi, index) => {
+    const key = document.createElement('button');
+    key.type = 'button';
+    key.className = 'wkey';
+    key.dataset.midi = String(midi);
+    key.style.color = SOLF_COLORS[index];
+    key.textContent = SOLFEGE_KEYS[index];
+    if (target && target.midi === midi) key.classList.add('target');
+    key.addEventListener('click', () => handleInput({ value: midi }));
+    keys.append(key);
+  });
+  for (const after of [0, 1, 3, 4, 5]) {
+    const black = document.createElement('span');
+    black.className = 'bkey';
+    black.style.left = `${(100 * (after + 1)) / 7}%`;
+    keys.append(black);
   }
+  pianoPad.append(keys);
+}
+
+function flashHint() {
+  const target = getCurrentTarget(game);
+  if (!target) return;
+  const el = mode === 'sing'
+    ? solfegePad.querySelector(`.solfege-btn[data-solf="${target.solfege}"]`)
+    : pianoPad.querySelector(`.wkey[data-midi="${target.midi}"]`);
+  if (!el) return;
+  el.classList.add('flash');
+  setTimeout(() => el.classList.remove('flash'), 1400);
 }
 
 function startPlayback() {
@@ -351,7 +405,7 @@ function startPlayback() {
   playbackTimer = 0;
   nextPlaybackIndex = 0;
   game.feedback = '全曲回放中';
-  renderInputPad();
+  renderInputs();
 }
 
 function judgeLiveAudio(live) {
@@ -403,7 +457,7 @@ function registerAudioHit(result) {
   audioJudgeCooldown = 0.95;
   engine.playTone(result.target.midi, 0.16);
   if (game.phase === 'playback') startPlayback();
-  renderInputPad();
+  renderInputs();
   updateGameHud();
 }
 
@@ -416,7 +470,7 @@ function gameFrame(dt, live) {
     burstTimer -= dt;
     if (burstTimer <= 0) {
       settleBurst(game);
-      renderInputPad();
+      renderInputs();
     }
   }
   if (game.phase === 'playback' && playbackEvents.length > 0) {
@@ -434,15 +488,19 @@ function gameFrame(dt, live) {
 }
 
 function updateGameHud(live = engine.getLive()) {
+  bestStreak = Math.max(bestStreak, game.streak);
   gameMicBtn.classList.toggle('live', engine.isReady());
-  gameLevel.style.width = `${Math.min(100, Math.round(live.rms * 620))}%`;
+  listenPanel.classList.toggle('live', live.rms > 0.02);
   detectedNote.textContent = live.midi ? midiName(live.midi) : '--';
   detectedCents.textContent = Number.isFinite(liveCents)
-    ? `${liveCents > 0 ? '+' : ''}${Math.round(liveCents)} cents`
+    ? (Math.abs(liveCents) <= 15 ? '准' : liveCents > 0 ? '偏高' : '偏低')
     : '';
+  if (Number.isFinite(liveCents)) {
+    playNeedle.style.left = `${Math.max(2, Math.min(98, 50 + liveCents))}%`;
+  }
   scoreEl.textContent = String(game.score);
   streakEl.textContent = String(game.streak);
-  progressEl.textContent = `${game.placedNotes.length} / ${game.song.notes.length}`;
+  bestStreakEl.textContent = String(bestStreak);
   feedbackEl.textContent = game.feedback;
 }
 
@@ -489,15 +547,28 @@ function drawSpriteContain(name, cx, cy, maxW, maxH, anchor = 'center') {
   return true;
 }
 
-function staffTop(height) { return height * 0.16; }
-function staffGap(height) { return Math.max(20, height * 0.05); }
+function staffTop(height) { return height * 0.085; }
+function staffGap(height) { return Math.max(16, height * 0.044); }
 
 function drawStaff(width, height) {
   const x = width * 0.1;
   const staffWidth = width * 0.8;
   const top = staffTop(height);
   const gap = staffGap(height);
-  ctx.strokeStyle = '#3a4a63';
+  // cream score board
+  const bx = x - gap * 2.4;
+  const by = top - gap * 1.8;
+  const bw = staffWidth + gap * 4.8;
+  const bh = gap * 8;
+  ctx.fillStyle = 'rgba(251, 243, 221, 0.94)';
+  roundedRect(bx, by, bw, bh, gap * 0.9);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(225, 205, 160, 0.95)';
+  ctx.lineWidth = 3;
+  roundedRect(bx, by, bw, bh, gap * 0.9);
+  ctx.stroke();
+  // treble staff lines
+  ctx.strokeStyle = '#46566f';
   ctx.lineWidth = 2;
   for (let line = 0; line < 5; line += 1) {
     const y = top + line * gap;
@@ -506,9 +577,9 @@ function drawStaff(width, height) {
     ctx.lineTo(x + staffWidth, y);
     ctx.stroke();
   }
-  ctx.font = `900 ${gap * 3.2}px ui-rounded, system-ui`;
-  ctx.fillStyle = '#3a4a63';
-  ctx.fillText('𝄞', x - gap * 1.8, top + gap * 3.1);
+  ctx.font = `900 ${gap * 3.4}px ui-rounded, system-ui`;
+  ctx.fillStyle = '#46566f';
+  ctx.fillText('𝄞', x - gap * 1.9, top + gap * 3.2);
 }
 
 function noteY(height, songNote) {
@@ -521,15 +592,24 @@ function drawPlacedNotes(width, height) {
   const startX = width * 0.2;
   const span = width * 0.6;
   const gap = span / Math.max(1, game.song.notes.length - 1);
-  for (const [index, songNote] of game.placedNotes.entries()) {
+  game.placedNotes.forEach((songNote, index) => {
     const x = startX + index * gap;
-    drawNoteHead(x, noteY(height, songNote), staffGap(height), '#3f8de0');
-    ctx.fillStyle = '#3a4a63';
-    ctx.font = '800 15px ui-rounded, system-ui';
+    const y = noteY(height, songNote);
+    const color = SOLF_COLORS[SOLFEGE.indexOf(songNote.solfege)] ?? '#3f8de0';
+    const latest = index === game.placedNotes.length - 1;
+    if (latest) {
+      ctx.save();
+      ctx.shadowColor = 'rgba(246, 185, 59, 0.9)';
+      ctx.shadowBlur = 18;
+    }
+    drawNoteHead(x, y, staffGap(height), color);
+    if (latest) ctx.restore();
+    ctx.fillStyle = '#46566f';
+    ctx.font = '800 14px ui-rounded, system-ui';
     ctx.textAlign = 'center';
-    ctx.fillText(songNote.solfege, x, noteY(height, songNote) + staffGap(height) * 1.7);
+    ctx.fillText(songNote.solfege, x, y + staffGap(height) * 1.9);
     ctx.textAlign = 'start';
-  }
+  });
 }
 
 function drawBalloon(width, height) {
@@ -537,17 +617,15 @@ function drawBalloon(width, height) {
   const target = getCurrentTarget(game) ?? game.placedNotes.at(-1);
   const bob = Math.sin(elapsed * 2.8) * 10;
   const x = width * 0.6;
-  const y = height * 0.5 + bob;
-  const rx = Math.min(88, width * 0.085);
-  const ry = rx * 1.18;
+  const y = height * 0.52 + bob;
+  const rx = Math.min(94, width * 0.088);
+  const ry = rx * 1.16;
   const placed = game.balloon.state === 'placed';
   balloonPos = { x, y, rx, ry };
 
   ctx.save();
   if (placed) ctx.globalAlpha = 0.4;
   const drew = drawSpriteContain('balloon_note_question', x, y, rx * 2.7, ry * 2.6, 'center');
-  ctx.restore();
-
   if (!drew) {
     ctx.fillStyle = placed ? 'rgba(155, 120, 214, 0.3)' : '#9b6cd6';
     ctx.beginPath();
@@ -556,39 +634,65 @@ function drawBalloon(width, height) {
     ctx.strokeStyle = '#7a4fc0';
     ctx.lineWidth = 3;
     ctx.stroke();
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.beginPath();
+    ctx.ellipse(x - rx * 0.32, y - ry * 0.34, rx * 0.22, ry * 0.16, -0.5, 0, Math.PI * 2);
+    ctx.fill();
     ctx.strokeStyle = '#b69be0';
+    ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(x, y + ry);
-    ctx.quadraticCurveTo(x - 20, y + ry + 42, x + 8, y + ry + 84);
+    ctx.quadraticCurveTo(x - 18, y + ry + 40, x + 8, y + ry + 80);
     ctx.stroke();
   }
+  ctx.restore();
 
-  // Dynamic solfège label on a soft plate so the target stays readable over any art.
-  const label = target?.solfege ?? '';
-  if (label) {
-    const fs = rx * 0.6;
-    ctx.font = `900 ${fs}px ui-rounded, system-ui`;
-    const plateW = ctx.measureText(label).width + fs;
-    const plateH = fs * 1.5;
-    ctx.save();
-    ctx.globalAlpha = placed ? 0.5 : 1;
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-    roundedRect(x - plateW / 2, y - plateH / 2, plateW, plateH, plateH / 2);
-    ctx.fill();
-    ctx.fillStyle = '#6f43c0';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(label, x, y + 1);
-    ctx.textAlign = 'start';
-    ctx.textBaseline = 'alphabetic';
-    ctx.restore();
+  // The target is shown as actual notation (mini-staff + notehead) — this is the 识谱 core.
+  if (target) drawBalloonNotation(x, y, rx, ry, target, placed);
+}
+
+function drawBalloonNotation(x, y, rx, ry, target, placed) {
+  const winW = rx * 1.5;
+  const winH = ry * 1.12;
+  const mg = winH * 0.17;
+  const sw = winW * 0.4;
+  ctx.save();
+  if (placed) ctx.globalAlpha = 0.5;
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.88)';
+  roundedRect(x - winW / 2, y - winH / 2, winW, winH, winH * 0.16);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(43, 58, 79, 0.78)';
+  ctx.lineWidth = 1.6;
+  for (let k = 0; k < 5; k += 1) {
+    const ly = y + (k - 2) * mg;
+    ctx.beginPath();
+    ctx.moveTo(x - sw, ly);
+    ctx.lineTo(x + sw, ly);
+    ctx.stroke();
   }
+  const noteY2 = y + 2 * mg - target.staffStep * (mg * 0.5);
+  const color = SOLF_COLORS[SOLFEGE.indexOf(target.solfege)] ?? '#46566f';
+  ctx.save();
+  ctx.translate(x, noteY2);
+  ctx.rotate(-0.3);
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, mg * 0.64, mg * 0.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2.4;
+  ctx.beginPath();
+  ctx.moveTo(x + mg * 0.56, noteY2 - 1);
+  ctx.lineTo(x + mg * 0.56, noteY2 - mg * 2.2);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawProjectile(width, height) {
   if (game.phase !== 'burst') return;
   const fromX = width * 0.15;
-  const fromY = height * 0.78;
+  const fromY = height * 0.8;
   const t = 1 - Math.max(0, Math.min(1, burstTimer / 0.7));
   const x = fromX + (balloonPos.x - fromX) * t;
   const y = fromY + (balloonPos.y - fromY) * t - Math.sin(t * Math.PI) * 64;
@@ -668,6 +772,7 @@ function roundedRect(x, y, width, height, radius) {
 
 gameMicBtn.addEventListener('click', () => engine.enable());
 replayBtn.addEventListener('click', startPlayback);
+hintBtn.addEventListener('click', flashHint);
 
 const gameScreen = {
   async enter({ mode: nextMode = 'sing' } = {}) {

@@ -269,6 +269,31 @@ button { border: 0; font: inherit; cursor: pointer; color: inherit; }
 .syllable-card.active .state { color: var(--warn); }
 .syllable-card.done { border-color: var(--green); background: #effaef; }
 .syllable-card.done .state { color: var(--green); }
+.syl-progress { width: 80%; height: 6px; border-radius: 999px; background: #ece3cf; overflow: hidden; }
+.syl-progress i { display: block; width: 0%; height: 100%; border-radius: inherit; background: var(--yellow); transition: width 90ms linear; }
+
+.cal-sing-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px;
+  border-radius: 14px;
+  background: #eaf4ff;
+  border: 2px solid #bcd9f6;
+}
+.cal-sing-controls[hidden] { display: none; }
+.cal-sing-hint { font-weight: 800; color: var(--sky-deep); font-size: clamp(0.8rem, 1.4vw, 1rem); }
+.cal-next-btn {
+  flex: none;
+  padding: 8px 18px;
+  border-radius: 12px;
+  background: var(--green);
+  color: #fff;
+  font-weight: 900;
+  box-shadow: 0 6px 12px rgba(91, 184, 95, 0.3);
+}
+.cal-next-btn:active { transform: scale(0.96); }
 .syl-n1 .syl { color: var(--red); }
 .syl-n2 .syl { color: #ef8a3b; }
 .syl-n3 .syl { color: #d9b13b; }

@@ -7,6 +7,7 @@ import {
   createSingSession,
   feedPianoFrame,
   feedSingFrame,
+  forceCaptureSing,
   persistPianoCalibration,
   persistSingCalibration,
   singProgress
@@ -50,6 +51,31 @@ test('singing session captures one template per syllable and finishes after Si',
   assert.equal(captures, SOLFEGE.length);
   assert.equal(session.templates.length, SOLFEGE.length);
   assert.equal(singProgress(session).completed, SOLFEGE.length);
+});
+
+test('manual next finalizes the current syllable from partial samples', () => {
+  const session = createSingSession();
+  feedSingFrame(session, voiceFrame(1), 0.12);
+  feedSingFrame(session, voiceFrame(2), 0.12);
+  assert.equal(session.stepIndex, 0, 'below minSamples so auto-capture has not fired');
+
+  const { captured } = forceCaptureSing(session);
+  assert.ok(captured, 'manual capture should finalize the syllable');
+  assert.equal(session.stepIndex, 1);
+  assert.equal(captured.template.completed, true);
+});
+
+test('singing capture auto-finalizes after maxDuration so it never stalls', () => {
+  const session = createSingSession();
+  for (let i = 1; i <= 3; i += 1) feedSingFrame(session, voiceFrame(i), 0.12);
+  // then only silence, advancing time past maxDuration
+  let captured = null;
+  for (let i = 0; i < 30 && !captured; i += 1) {
+    const out = feedSingFrame(session, { rms: 0, mfcc: null, mfccFrameId: 100 + i }, 0.12);
+    captured = out.captured;
+  }
+  assert.ok(captured, 'should auto-finalize from the few captured samples');
+  assert.equal(session.stepIndex, 1);
 });
 
 test('singing session ignores quiet frames below the rms gate', () => {

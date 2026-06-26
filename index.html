@@ -59,8 +59,12 @@
         <div class="cal-cards">
           <section class="cal-card cal-card-sing">
             <div class="cal-card-head sing">🎤 唱谱校准</div>
-            <p class="cal-instruction">请对着麦克风，依次唱 <b>Do Re Mi</b><br><small>唱清楚，保持音调稳定哦！</small></p>
+            <p class="cal-instruction">请对着麦克风，依次唱 <b>Do Re Mi</b><br><small>每个音唱 1~2 秒，听到提示音就换下一个</small></p>
             <div class="syllable-strip" id="cal-syllables"></div>
+            <div class="cal-sing-controls" id="cal-sing-controls" hidden>
+              <span class="cal-sing-hint" id="cal-sing-hint">请大声唱出高亮的音名～</span>
+              <button class="cal-next-btn" id="cal-next" type="button">这个录好了 ➜</button>
+            </div>
             <p class="cal-tip">⭐ 小提示：用自然的声音，像说话一样放松即可。</p>
           </section>
 

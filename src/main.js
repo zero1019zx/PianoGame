@@ -16,13 +16,14 @@ import {
   submitInput
 } from './notationGame.js';
 import {
-  activeSolfege,
   createPianoSession,
   createSingSession,
   feedPianoFrame,
   feedSingFrame,
+  forceCaptureSing,
   persistPianoCalibration,
-  persistSingCalibration
+  persistSingCalibration,
+  singCaptureProgress
 } from './calibration.js';
 import { createAudioEngine } from './audioEngine.js';
 import {
@@ -108,6 +109,9 @@ const calMiniPiano = document.querySelector('#cal-mini-piano');
 const calStartBtn = document.querySelector('#cal-start');
 const calDoneBtn = document.querySelector('#cal-done');
 const calResetBtn = document.querySelector('#cal-reset');
+const calSingControls = document.querySelector('#cal-sing-controls');
+const calSingHint = document.querySelector('#cal-sing-hint');
+const calNextBtn = document.querySelector('#cal-next');
 
 let cal = { phase: 'idle', sing: null, piano: null, lastNeedle: 0 };
 
@@ -135,7 +139,8 @@ function renderSyllables() {
       <svg class="wave" viewBox="0 0 40 14" preserveAspectRatio="none" aria-hidden="true">
         <path d="M0 7 Q3 1 6 7 T12 7 T18 7 T24 7 T30 7 T36 7 T42 7" fill="none" stroke="currentColor" stroke-width="2"/>
       </svg>
-      <span class="state">${done ? '已识别' : active ? '录音中' : '待录入'}</span>`;
+      <span class="state">${done ? '已识别' : active ? '录音中' : '待录入'}</span>
+      ${active ? '<div class="syl-progress"><i></i></div>' : ''}`;
     calSyllables.append(card);
   });
 }
@@ -178,6 +183,8 @@ async function startCalibration() {
   engine.resetSequence();
   cal = { phase: 'sing', sing: createSingSession(), piano: null, lastNeedle: 0 };
   calStartBtn.querySelector('small').textContent = '请依次唱 Do Re Mi…';
+  calSingControls.hidden = false;
+  calSingHint.textContent = '请大声唱出高亮的音名～';
   renderSyllables();
   renderPianoResult();
 }
@@ -187,9 +194,22 @@ function finishSingPhase() {
   snapshotProfile();
   cal.phase = 'piano';
   cal.piano = createPianoSession();
+  calSingControls.hidden = true;
   engine.resetSequence();
   renderSyllables();
   renderPianoResult();
+}
+
+function manualNextSyllable() {
+  if (cal.phase !== 'sing') return;
+  const { captured, done } = forceCaptureSing(cal.sing);
+  if (!captured) {
+    calSingHint.textContent = '先唱一下这个音再点哦～';
+    return;
+  }
+  engine.playTone(captured.template.midi ?? SOLFEGE_MIDI[captured.stepIndex], 0.16);
+  renderSyllables();
+  if (done) finishSingPhase();
 }
 
 function finishPianoPhase(result) {
@@ -224,7 +244,16 @@ function calibrationFrame(dt, live) {
       engine.playTone(captured.template.midi ?? SOLFEGE_MIDI[captured.stepIndex], 0.16);
       renderSyllables();
     }
-    if (done) finishSingPhase();
+    if (done) {
+      finishSingPhase();
+    } else {
+      const fill = calSyllables.querySelector('.syllable-card.active .syl-progress i');
+      if (fill) fill.style.width = `${Math.round(singCaptureProgress(cal.sing) * 100)}%`;
+      const solfege = SOLFEGE[cal.sing.stepIndex] ?? '';
+      calSingHint.textContent = live.rms >= 0.012
+        ? `听到啦，继续唱「${solfege}」…`
+        : '没听到声音，靠近麦克风大声唱～';
+    }
   } else if (cal.phase === 'piano') {
     if (live.frequency) renderNeedle(centsBetween(midiToFrequency(60), live.frequency));
     const { result, done } = feedPianoFrame(cal.piano, live, dt);
@@ -236,12 +265,14 @@ function calibrationFrame(dt, live) {
 }
 
 calStartBtn.addEventListener('click', startCalibration);
+calNextBtn.addEventListener('click', manualNextSyllable);
 calResetBtn.addEventListener('click', () => {
   resetCalibration(store, 'sing');
   resetCalibration(store, 'play');
   saveCalibrationProfile({ sing: null, play: null }).catch(() => null);
   cal = { phase: 'idle', sing: null, piano: null, lastNeedle: 0 };
   calStartBtn.querySelector('small').textContent = '一步步完成校准';
+  calSingControls.hidden = true;
   renderSyllables();
   renderPianoResult();
 });
@@ -251,6 +282,7 @@ const calibrationScreen = {
   enter() {
     cal = { phase: 'idle', sing: null, piano: null, lastNeedle: 0 };
     calEnvPill.textContent = engine.isReady() ? '麦克风已就绪' : '等待麦克风';
+    calSingControls.hidden = true;
     renderSyllables();
     renderPianoResult();
   },

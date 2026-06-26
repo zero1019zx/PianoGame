@@ -32,50 +32,56 @@ function voiceFrame(id, midi = 60) {
   };
 }
 
-test('singing session captures one template per syllable and finishes after Si', () => {
+test('singing session captures a multi-take template per syllable and finishes after Si', () => {
   const session = createSingSession();
-  let captures = 0;
+  let syllables = 0;
   let frameId = 1;
 
-  // Feed plenty of fresh frames; each ~0.12s like the throttled engine cadence.
-  for (let i = 0; i < SOLFEGE.length * 40 && !session.done; i += 1) {
-    const { captured } = feedSingFrame(session, voiceFrame(frameId), 0.12);
+  for (let i = 0; i < SOLFEGE.length * 80 && !session.done; i += 1) {
+    const { syllableDone } = feedSingFrame(session, voiceFrame(frameId), 0.12);
     frameId += 1;
-    if (captured) {
-      captures += 1;
-      assert.equal(captured.template.completed, true);
+    if (syllableDone) {
+      syllables += 1;
+      assert.equal(syllableDone.template.completed, true);
+      assert.equal(syllableDone.template.takes.length, 2, 'each syllable keeps both takes');
     }
   }
 
   assert.equal(session.done, true);
-  assert.equal(captures, SOLFEGE.length);
+  assert.equal(syllables, SOLFEGE.length);
   assert.equal(session.templates.length, SOLFEGE.length);
   assert.equal(singProgress(session).completed, SOLFEGE.length);
 });
 
-test('manual next finalizes the current syllable from partial samples', () => {
+test('two takes complete a syllable; manual next finalizes one take at a time', () => {
   const session = createSingSession();
   feedSingFrame(session, voiceFrame(1), 0.12);
   feedSingFrame(session, voiceFrame(2), 0.12);
-  assert.equal(session.stepIndex, 0, 'below minSamples so auto-capture has not fired');
 
-  const { captured } = forceCaptureSing(session);
-  assert.ok(captured, 'manual capture should finalize the syllable');
+  let out = forceCaptureSing(session);
+  assert.ok(out.takeCaptured, 'first take finalized');
+  assert.equal(out.syllableDone, null, 'syllable not done after one take');
+  assert.equal(session.takeIndex, 1);
+  assert.equal(session.stepIndex, 0);
+
+  feedSingFrame(session, voiceFrame(3), 0.12);
+  feedSingFrame(session, voiceFrame(4), 0.12);
+  out = forceCaptureSing(session);
+  assert.ok(out.syllableDone, 'syllable completes after the second take');
+  assert.equal(out.syllableDone.template.takes.length, 2);
   assert.equal(session.stepIndex, 1);
-  assert.equal(captured.template.completed, true);
 });
 
-test('singing capture auto-finalizes after maxDuration so it never stalls', () => {
+test('singing capture auto-finalizes a take after maxDuration so it never stalls', () => {
   const session = createSingSession();
   for (let i = 1; i <= 3; i += 1) feedSingFrame(session, voiceFrame(i), 0.12);
-  // then only silence, advancing time past maxDuration
-  let captured = null;
-  for (let i = 0; i < 30 && !captured; i += 1) {
+  let takeCaptured = null;
+  for (let i = 0; i < 30 && !takeCaptured; i += 1) {
     const out = feedSingFrame(session, { rms: 0, mfcc: null, mfccFrameId: 100 + i }, 0.12);
-    captured = out.captured;
+    takeCaptured = out.takeCaptured;
   }
-  assert.ok(captured, 'should auto-finalize from the few captured samples');
-  assert.equal(session.stepIndex, 1);
+  assert.ok(takeCaptured, 'should auto-finalize a take from the few captured samples');
+  assert.equal(session.takeIndex, 1);
 });
 
 test('singing session ignores quiet frames below the rms gate', () => {

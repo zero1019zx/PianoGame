@@ -1,9 +1,14 @@
 import {
   buildSingingTemplate,
   centsBetween,
+  frequencyToMidi,
   midiToFrequency
 } from './audioAnalysis.js';
 import { SOLFEGE, submitCalibration } from './notationGame.js';
+
+// Each syllable is recorded this many times; the takes are kept and matched with
+// min-DTW at game time, which is far more robust to a child's voice variation.
+export const SING_TAKES = 2;
 
 // Capture-quality gates. Tuning these is the main lever on later in-game
 // recognition accuracy, so they live in one place and are exercised by tests.
@@ -30,8 +35,10 @@ export function createSingSession() {
   return {
     mode: 'sing',
     stepIndex: 0,
+    takeIndex: 0,
     stepElapsed: 0,
     samples: [],
+    takes: [], // takes captured for the CURRENT syllable
     templates: [],
     lastMfccFrameId: -1,
     done: false
@@ -52,10 +59,11 @@ export function activeSolfege(session) {
   return SOLFEGE[session.stepIndex] ?? null;
 }
 
-// Advance a singing session by one audio frame. Returns the (mutated) session
-// plus a `captured` payload on the frame a syllable template is finalized.
+// Advance a singing session by one audio frame. Returns `takeCaptured` when one
+// take finalizes, and `syllableDone` (the aggregated multi-take template) when
+// all takes for the current syllable are collected.
 export function feedSingFrame(session, live, dt) {
-  if (session.done) return { session, captured: null, done: true };
+  if (session.done) return { session, takeCaptured: null, syllableDone: null, done: true };
   session.stepElapsed += dt;
 
   const isFreshFrame = live.mfcc
@@ -75,41 +83,65 @@ export function feedSingFrame(session, live, dt) {
     && session.samples.length >= SING_CAPTURE.minSamples;
   const timedOut = session.stepElapsed >= SING_CAPTURE.maxDuration
     && session.samples.length >= SING_CAPTURE.minTimeoutSamples;
-  let captured = null;
   if (ready || timedOut) {
-    captured = finalizeSingSyllable(session);
+    const { takeCaptured, syllableDone } = finalizeTake(session);
+    return { session, takeCaptured, syllableDone, done: session.done };
   }
-  return { session, captured, done: session.done };
+  return { session, takeCaptured: null, syllableDone: null, done: session.done };
 }
 
-// Build the current syllable's template from whatever was captured and advance.
-// Used both by auto-capture and the manual "next" button on the calibration UI.
+// Finalize the CURRENT take from whatever was captured (manual "next" button).
 export function forceCaptureSing(session) {
   if (session.done || session.samples.length === 0) {
-    return { captured: null, done: session.done };
+    return { takeCaptured: null, syllableDone: null, done: session.done };
   }
-  const captured = finalizeSingSyllable(session);
-  return { captured, done: session.done };
+  const { takeCaptured, syllableDone } = finalizeTake(session);
+  return { takeCaptured, syllableDone, done: session.done };
 }
 
-function finalizeSingSyllable(session) {
+function finalizeTake(session) {
   const solfege = SOLFEGE[session.stepIndex];
-  const template = buildSingingTemplate(solfege, session.samples);
-  session.templates.push(template);
-  const captured = { solfege, template, stepIndex: session.stepIndex };
-  session.stepIndex += 1;
-  session.stepElapsed = 0;
+  const take = buildSingingTemplate(solfege, session.samples);
+  session.takes.push({ mfccSequence: take.mfccSequence ?? [], frequency: take.frequency ?? null });
   session.samples = [];
-  if (session.stepIndex >= SOLFEGE.length) session.done = true;
-  return captured;
+  session.stepElapsed = 0;
+  session.takeIndex += 1;
+  const takeCaptured = { solfege, take: session.takeIndex, midi: take.midi ?? null };
+
+  let syllableDone = null;
+  if (session.takeIndex >= SING_TAKES) {
+    const sequences = session.takes.map((t) => t.mfccSequence).filter((s) => Array.isArray(s) && s.length > 0);
+    const freqs = session.takes.map((t) => t.frequency).filter(Boolean);
+    const avgFreq = freqs.length ? freqs.reduce((a, b) => a + b, 0) / freqs.length : null;
+    const template = {
+      solfege,
+      completed: sequences.length > 0,
+      takes: sequences,
+      mfccSequence: sequences[0] ?? [], // back-compat for single-take matchers
+      frequency: avgFreq,
+      midi: avgFreq ? frequencyToMidi(avgFreq) : (take.midi ?? null),
+      samples: session.takes.length
+    };
+    session.templates.push(template);
+    syllableDone = { solfege, template, stepIndex: session.stepIndex };
+    session.takes = [];
+    session.takeIndex = 0;
+    session.stepIndex += 1;
+    if (session.stepIndex >= SOLFEGE.length) session.done = true;
+  }
+  return { takeCaptured, syllableDone };
 }
 
-// 0..1 progress for the active syllable, for a live capture bar in the UI.
+// 0..1 progress for the current take, for a live capture bar in the UI.
 export function singCaptureProgress(session) {
   if (!session || session.done) return 0;
   const byTime = session.stepElapsed / SING_CAPTURE.minDuration;
   const bySamples = session.samples.length / SING_CAPTURE.minSamples;
   return Math.max(0, Math.min(1, Math.min(byTime, bySamples)));
+}
+
+export function singTakeInfo(session) {
+  return { take: (session?.takeIndex ?? 0) + 1, total: SING_TAKES };
 }
 
 // Advance a piano (central-C) session by one audio frame. Returns a `result`

@@ -23,7 +23,8 @@ import {
   forceCaptureSing,
   persistPianoCalibration,
   persistSingCalibration,
-  singCaptureProgress
+  singCaptureProgress,
+  singTakeInfo
 } from './calibration.js';
 import { createAudioEngine } from './audioEngine.js';
 import {
@@ -139,7 +140,7 @@ function renderSyllables() {
       <svg class="wave" viewBox="0 0 40 14" preserveAspectRatio="none" aria-hidden="true">
         <path d="M0 7 Q3 1 6 7 T12 7 T18 7 T24 7 T30 7 T36 7 T42 7" fill="none" stroke="currentColor" stroke-width="2"/>
       </svg>
-      <span class="state">${done ? '已识别' : active ? '录音中' : '待录入'}</span>
+      <span class="state">${done ? '已识别' : active ? `第${singTakeInfo(cal.sing).take}/${singTakeInfo(cal.sing).total}遍` : '待录入'}</span>
       ${active ? '<div class="syl-progress"><i></i></div>' : ''}`;
     calSyllables.append(card);
   });
@@ -202,12 +203,12 @@ function finishSingPhase() {
 
 function manualNextSyllable() {
   if (cal.phase !== 'sing') return;
-  const { captured, done } = forceCaptureSing(cal.sing);
-  if (!captured) {
+  const { takeCaptured, done } = forceCaptureSing(cal.sing);
+  if (!takeCaptured) {
     calSingHint.textContent = '先唱一下这个音再点哦～';
     return;
   }
-  engine.playTone(captured.template.midi ?? SOLFEGE_MIDI[captured.stepIndex], 0.16);
+  engine.playTone(takeCaptured.midi ?? SOLFEGE_MIDI[SOLFEGE.indexOf(takeCaptured.solfege)], 0.16);
   renderSyllables();
   if (done) finishSingPhase();
 }
@@ -239,9 +240,9 @@ function calibrationFrame(dt, live) {
   }
 
   if (cal.phase === 'sing') {
-    const { captured, done } = feedSingFrame(cal.sing, live, dt);
-    if (captured) {
-      engine.playTone(captured.template.midi ?? SOLFEGE_MIDI[captured.stepIndex], 0.16);
+    const { takeCaptured, done } = feedSingFrame(cal.sing, live, dt);
+    if (takeCaptured) {
+      engine.playTone(takeCaptured.midi ?? SOLFEGE_MIDI[SOLFEGE.indexOf(takeCaptured.solfege)], 0.16);
       renderSyllables();
     }
     if (done) {
@@ -250,9 +251,10 @@ function calibrationFrame(dt, live) {
       const fill = calSyllables.querySelector('.syllable-card.active .syl-progress i');
       if (fill) fill.style.width = `${Math.round(singCaptureProgress(cal.sing) * 100)}%`;
       const solfege = SOLFEGE[cal.sing.stepIndex] ?? '';
+      const { take, total } = singTakeInfo(cal.sing);
       calSingHint.textContent = live.rms >= 0.012
-        ? `听到啦，继续唱「${solfege}」…`
-        : '没听到声音，靠近麦克风大声唱～';
+        ? `听到啦，唱「${solfege}」(第 ${take}/${total} 遍)…`
+        : `没听到声音，靠近麦克风大声唱「${solfege}」～`;
     }
   } else if (cal.phase === 'piano') {
     if (live.frequency) renderNeedle(centsBetween(midiToFrequency(60), live.frequency));
@@ -452,8 +454,8 @@ function judgeLiveAudio(live) {
       detectedFrequency: live.frequency,
       detectedMfccSequence: live.mfccSequence.slice(-10),
       templates: calibration.templates ?? [],
-      toleranceCents: 140,
-      tolerance: 24
+      toleranceCents: 150,
+      tolerance: 30
     });
     liveCents = match.cents ?? null;
     if (match.correct && match.solfege === target.solfege) {

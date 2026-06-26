@@ -82,6 +82,22 @@ test('singing template matching picks the closest calibrated solfege', () => {
   assert.equal(result.correct, true);
 });
 
+test('singing template matching scores against the closest take of each syllable', () => {
+  const result = matchSingingTemplate({
+    detectedMfccSequence: [[4, 2, 1], [4.1, 2.1, 1.1]],
+    templates: [
+      { solfege: 'Do', completed: true, takes: [[[0, 0, 0]], [[0.1, 0, 0]]] },
+      { solfege: 'Re', completed: true, takes: [[[9, 9, 9]], [[4, 2, 1], [4.1, 2, 1.1]]] },
+      { solfege: 'Mi', completed: true, takes: [[[8, 4, 2]]] }
+    ],
+    tolerance: 1.5
+  });
+
+  assert.equal(result.solfege, 'Re');
+  assert.equal(result.correct, true);
+  assert.equal(result.method, 'mfcc-dtw');
+});
+
 test('singing template matching prefers MFCC DTW when feature sequences are available', () => {
   const result = matchSingingTemplate({
     detectedMfccSequence: [[4, 2, 1], [4.1, 2.1, 1.1], [3.9, 1.9, 1]],

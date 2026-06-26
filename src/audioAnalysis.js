@@ -90,15 +90,19 @@ export function matchSingingTemplate({
 }) {
   const mfccTemplates = templates.filter((template) => (
     template.completed
-    && Array.isArray(template.mfccSequence)
-    && template.mfccSequence.length > 0
+    && ((Array.isArray(template.takes) && template.takes.length > 0)
+      || (Array.isArray(template.mfccSequence) && template.mfccSequence.length > 0))
   ));
   if (Array.isArray(detectedMfccSequence) && detectedMfccSequence.length > 0 && mfccTemplates.length > 0) {
     const best = mfccTemplates
-      .map((template) => ({
-        template,
-        distance: dtwDistance(detectedMfccSequence, template.mfccSequence)
-      }))
+      .map((template) => {
+        // Match against each take of this syllable and keep the closest one.
+        const sequences = (Array.isArray(template.takes) && template.takes.length > 0)
+          ? template.takes
+          : [template.mfccSequence];
+        const distance = Math.min(...sequences.map((seq) => dtwDistance(detectedMfccSequence, seq)));
+        return { template, distance };
+      })
       .sort((a, b) => a.distance - b.distance)[0];
 
     return {

@@ -15,7 +15,13 @@ Original prompt: 复用该项目的做法，开展下一项目的工作：钢琴
 - 2026-06-26: Built the 声音校准 screen as a full closed loop — mic authorization → guided Do..Si singing capture + central-C piano capture → quality-gated matching/template build → persist to localStorage (read by games) plus an IndexedDB profile snapshot → recorded status written back to the home pills.
 - 2026-06-26: Verified with `npm test` (16 pass, incl. new calibration tests) and a jsdom DOM smoke of the home→calibration→record→game flow. Updated `tests/browser-smoke.mjs` for the new navigation (run `npm run smoke` on macOS for the screenshot).
 
+- 2026-06-26: Mobile landscape support — added a portrait "请横屏" overlay (phones / small tablets) and a `@media (orientation: landscape) and (max-height: 500px)` pass that compacts all three screens (smaller type/padding, hide tips & secondary labels) so common phone-landscape sizes (~640–932 × 360–430) fit without overflow; kept 100dvh + safe-area.
+- 2026-06-26: UI re-skin with the updated sprite cut-outs — home status pills → cream lozenge to match `status_pill_*`; back/replay round buttons → `btn_home_round` / `btn_replay_round`; game instruction banner → `hud_instruction_card`; 弹奏模式 shows `keyboard_reference_strip`. Game canvas now draws `balloon_note_question` / `toy_note_cannon` / `note_projectile` / `note_wrong_red_marker` via a preloader with procedural fallback (staff stays procedural for exact note placement). Solfège name renders on a soft plate over the balloon so the target stays readable.
+- 2026-06-26: Verified — `npm test` 16 pass; jsdom DOM smoke covers home→calibration→record→sing(places notes)→play, plus keyboard-strip toggle and is-sing/is-play classes; all CSS/HTML/JS sprite paths resolve and CSS braces balance. Pixel-level responsive + real mic still need an on-device/browser pass.
+
 ## TODO
+
+- Reserved the two `panel_voice_listening` / `panel_piano_listening` HUD slices — wire them as the tablet listen-bar background (overlay live "听到 X" in the baked result box) once positions can be eyeballed on a real screen.
 
 - Next: pixel-polish the two game screens (mockups 2 & 3) — draw the staff board / balloon / cannon / keyboard strip from the PNG sprites instead of procedural canvas shapes.
 - On-device: validate real mic capture + DTW thresholds on iPad Safari with actual child voices; add a stronger YIN/CREPE pitch adapter for piano.

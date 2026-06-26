@@ -123,7 +123,8 @@ button { border: 0; font: inherit; cursor: pointer; color: inherit; }
   gap: 8px;
   padding: 9px 22px;
   border-radius: 999px;
-  background: #fff;
+  background: #f8f1dd;
+  border: 2px solid #ecdcb4;
   font-weight: 900;
   font-size: clamp(0.85rem, 1.5vw, 1.1rem);
   box-shadow: 0 6px 14px rgba(40, 70, 110, 0.16);
@@ -150,6 +151,13 @@ button { border: 0; font: inherit; cursor: pointer; color: inherit; }
   flex: none;
 }
 .round-btn:active { transform: scale(0.94); }
+.round-home,
+.round-replay {
+  background: center / contain no-repeat;
+  box-shadow: none;
+}
+.round-home { background-image: url("assets/sprites/png/btn_home_round.png"); }
+.round-replay { background-image: url("assets/sprites/png/btn_replay_round.png"); }
 
 /* ============ 声音校准 ============ */
 .cal-top {
@@ -392,10 +400,10 @@ button { border: 0; font: inherit; cursor: pointer; color: inherit; }
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 8px 20px;
+  justify-content: center;
+  padding: 8px 22px 8px clamp(40px, 5vw, 70px);
   border-radius: 16px;
-  background: linear-gradient(180deg, #fbe6a8, #f5d784);
-  box-shadow: 0 6px 14px rgba(120, 95, 40, 0.2);
+  background: url("assets/sprites/png/hud_instruction_card.png") center / 100% 100% no-repeat;
   text-align: center;
 }
 .hud-instruction strong { font-size: clamp(1rem, 1.8vw, 1.3rem); }
@@ -456,10 +464,85 @@ button { border: 0; font: inherit; cursor: pointer; color: inherit; }
 .input-pad button:active { transform: scale(0.96); }
 .input-pad button:focus-visible { outline: 4px solid var(--yellow); outline-offset: 2px; }
 
-/* ============ 竖屏提醒 ============ */
-@media (orientation: portrait) {
+/* 弹奏模式键盘参考条 */
+.keyboard-strip {
+  display: block;
+  width: min(92%, 760px);
+  margin: 0 auto;
+  max-height: clamp(58px, 11vh, 120px);
+  object-fit: contain;
+}
+.keyboard-strip[hidden] { display: none; }
+
+/* ============ 竖屏：请横屏提示 ============ */
+.rotate-hint { display: none; }
+
+@media (orientation: portrait) and (max-width: 1024px) {
+  .rotate-hint {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    background: linear-gradient(170deg, #bfe6fb, #d7f0d4);
+    text-align: center;
+  }
+  .rotate-hint .rotate-icon { font-size: 4.4rem; animation: rotateWiggle 1.6s ease-in-out infinite; }
+  .rotate-hint p { margin: 0; font-size: 1.4rem; font-weight: 900; color: var(--ink); }
+}
+@keyframes rotateWiggle { 0%, 100% { transform: rotate(-14deg); } 50% { transform: rotate(14deg); } }
+
+/* iPad 竖屏仍可堆叠（横屏提示覆盖手机/小平板） */
+@media (orientation: portrait) and (min-width: 1025px) {
   .home-cards { grid-template-columns: 1fr; gap: 12px; }
   .cal-cards { grid-template-columns: 1fr; }
-  .game-hud { grid-template-columns: auto auto auto 1fr auto; }
-  .hud-instruction { grid-column: 1 / -1; order: 5; }
+}
+
+/* ============ 手机横屏（矮高度）适配 ============ */
+@media (orientation: landscape) and (max-height: 500px) {
+  .screen { padding: clamp(7px, 1.8vh, 14px) clamp(10px, 2vw, 20px); gap: clamp(6px, 1.4vh, 12px); }
+  .gear-btn { width: 42px; height: 42px; font-size: 1.3rem; top: 8px; left: 8px; }
+
+  .home-title { margin-top: 2px; }
+  .home-title h1 { font-size: clamp(1.15rem, 5vh, 1.9rem); padding: 6px 22px; border-width: 3px; }
+  .home-cards { gap: clamp(10px, 2.4vw, 26px); padding: 0 clamp(6px, 3vw, 40px); }
+  .home-card-wrap { gap: 6px; max-width: 38vh; }
+  .pill { padding: 5px 14px; }
+
+  .cal-top { gap: 8px; }
+  .cal-title h2 { font-size: clamp(1rem, 4.6vh, 1.5rem); padding: 5px 18px; }
+  .env-pill { padding: 6px 14px; }
+  .cal-cards { gap: 10px; }
+  .cal-card { padding: 9px 12px; gap: 6px; border-radius: 18px; }
+  .cal-card-head { margin-top: -20px; padding: 5px 16px; font-size: clamp(0.85rem, 3.6vh, 1.1rem); }
+  .cal-instruction { font-size: clamp(0.78rem, 3vh, 1rem); }
+  .cal-instruction small { display: none; }
+  .cal-tip { display: none; }
+  .syllable-card { padding: 5px 2px; border-radius: 12px; gap: 2px; }
+  .syllable-card .key { display: none; }
+  .syllable-card .wave { height: 10px; }
+  .c-badge { width: clamp(60px, 15vh, 92px); }
+  .gauge-rail { height: clamp(34px, 7vh, 60px); }
+  .mini-piano { height: clamp(46px, 9vh, 70px); }
+  .mini-key { padding-bottom: 4px; }
+  .cal-env { padding: 6px 12px; gap: 10px; }
+  .cal-env-label small { display: none; }
+  .big-btn { padding: 8px 10px; border-radius: 14px; font-size: clamp(0.9rem, 3.6vh, 1.2rem); }
+  .big-btn small { display: none; }
+
+  .game-hud { gap: 6px; }
+  .hud-chip { padding: 4px 10px; }
+  .hud-chip span { font-size: 0.6rem; }
+  .hud-chip strong { font-size: clamp(0.95rem, 4vh, 1.3rem); }
+  .hud-instruction { padding: 4px 14px 4px clamp(34px, 6vw, 56px); }
+  .hud-instruction span { display: none; }
+  .game-listen { padding: 5px 12px; gap: 10px; }
+  .listen-mic { width: 44px; height: 44px; font-size: 1.2rem; }
+  .feedback { font-size: 0.82rem; }
+  .keyboard-strip { max-height: 9vh; }
+  .input-pad { gap: 6px; }
+  .input-pad button { min-height: clamp(38px, 12vh, 56px); border-radius: 12px; }
 }

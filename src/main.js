@@ -39,6 +39,19 @@ const engine = createAudioEngine();
 const store = createBrowserCalibrationStore();
 openProfileDatabase().catch(() => null);
 
+// Preload gameplay sprites; canvas drawing falls back to procedural shapes
+// until each image is decoded, so a missing/slow asset never breaks the game.
+const SPRITES = {};
+for (const name of ['balloon_note_question', 'toy_note_cannon', 'note_projectile', 'note_wrong_red_marker']) {
+  const img = new Image();
+  img.src = `assets/sprites/png/${name}.png`;
+  SPRITES[name] = img;
+}
+function spriteReady(name) {
+  const img = SPRITES[name];
+  return Boolean(img && img.complete && img.naturalWidth > 0);
+}
+
 // ---------------------------------------------------------------- router ----
 const screenEls = Object.fromEntries(
   [...document.querySelectorAll('.screen')].map((el) => [el.dataset.screen, el])
@@ -260,6 +273,8 @@ const hudTitle = document.querySelector('#hud-title');
 const hudSub = document.querySelector('#hud-sub');
 const gameMicBtn = document.querySelector('#game-mic');
 const replayBtn = document.querySelector('#replay-btn');
+const keyboardStrip = document.querySelector('#keyboard-strip');
+const gameScreenEl = document.querySelector('[data-screen="game"]');
 
 let mode = 'sing';
 let game = createGame({ mode });
@@ -270,6 +285,8 @@ let playbackEvents = [];
 let nextPlaybackIndex = 0;
 let audioJudgeCooldown = 0;
 let liveCents = null;
+let wrongFlash = 0;
+let balloonPos = { x: 0, y: 0, rx: 0, ry: 0 };
 
 const HUD_COPY = {
   sing: { title: '请唱出气球里的音符', sub: '唱对后，音符会飞上去填在乐谱上哦！' },
@@ -285,8 +302,12 @@ function startGame(nextMode) {
   playbackEvents = [];
   nextPlaybackIndex = 0;
   liveCents = null;
+  wrongFlash = 0;
   hudTitle.textContent = HUD_COPY[mode].title;
   hudSub.textContent = HUD_COPY[mode].sub;
+  keyboardStrip.hidden = mode !== 'play';
+  gameScreenEl.classList.toggle('is-sing', mode === 'sing');
+  gameScreenEl.classList.toggle('is-play', mode === 'play');
   renderInputPad();
   updateGameHud();
 }
@@ -301,6 +322,7 @@ function handleInput(option) {
     renderInputPad();
   } else {
     engine.playTone(48, 0.05);
+    wrongFlash = 0.8;
   }
   updateGameHud();
 }
@@ -353,6 +375,7 @@ function judgeLiveAudio(live) {
     } else if (match.correct && match.solfege) {
       submitInput(game, { mode: 'sing', solfege: match.solfege });
       audioJudgeCooldown = 1.1;
+      wrongFlash = 0.8;
       updateGameHud();
     }
   } else {
@@ -368,6 +391,7 @@ function judgeLiveAudio(live) {
     } else if (Math.abs(match.cents) > 90) {
       submitInput(game, { mode: 'play', midi: match.midi });
       audioJudgeCooldown = 1.1;
+      wrongFlash = 0.8;
       updateGameHud();
     }
   }
@@ -386,6 +410,7 @@ function registerAudioHit(result) {
 function gameFrame(dt, live) {
   elapsed += dt;
   audioJudgeCooldown = Math.max(0, audioJudgeCooldown - dt);
+  wrongFlash = Math.max(0, wrongFlash - dt);
 
   if (game.phase === 'burst') {
     burstTimer -= dt;
@@ -447,8 +472,21 @@ function draw() {
   drawStaff(width, height);
   drawPlacedNotes(width, height);
   drawBalloon(width, height);
+  drawProjectile(width, height);
   drawLauncher(width, height);
-  drawMistakes(width, height);
+  drawWrongMarker(width, height);
+}
+
+function drawSpriteContain(name, cx, cy, maxW, maxH, anchor = 'center') {
+  if (!spriteReady(name)) return false;
+  const img = SPRITES[name];
+  const scale = Math.min(maxW / img.naturalWidth, maxH / img.naturalHeight);
+  const w = img.naturalWidth * scale;
+  const h = img.naturalHeight * scale;
+  const x = cx - w / 2;
+  const y = anchor === 'bottom' ? cy - h : cy - h / 2;
+  ctx.drawImage(img, x, y, w, h);
+  return true;
 }
 
 function staffTop(height) { return height * 0.16; }
@@ -499,55 +537,103 @@ function drawBalloon(width, height) {
   const target = getCurrentTarget(game) ?? game.placedNotes.at(-1);
   const bob = Math.sin(elapsed * 2.8) * 10;
   const x = width * 0.6;
-  const y = height * 0.56 + bob;
-  const rx = Math.min(78, width * 0.07);
-  const ry = rx * 1.16;
+  const y = height * 0.5 + bob;
+  const rx = Math.min(88, width * 0.085);
+  const ry = rx * 1.18;
   const placed = game.balloon.state === 'placed';
-  ctx.fillStyle = placed ? 'rgba(155, 120, 214, 0.3)' : '#9b6cd6';
-  ctx.beginPath();
-  ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = '#7a4fc0';
-  ctx.lineWidth = 3;
-  ctx.stroke();
-  ctx.fillStyle = '#ffffff';
-  ctx.font = `900 ${rx * 0.62}px ui-rounded, system-ui`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(target?.solfege ?? '', x, y);
-  ctx.textBaseline = 'alphabetic';
-  ctx.textAlign = 'start';
-  ctx.strokeStyle = '#b69be0';
-  ctx.beginPath();
-  ctx.moveTo(x, y + ry);
-  ctx.quadraticCurveTo(x - 20, y + ry + 42, x + 8, y + ry + 84);
-  ctx.stroke();
+  balloonPos = { x, y, rx, ry };
+
+  ctx.save();
+  if (placed) ctx.globalAlpha = 0.4;
+  const drew = drawSpriteContain('balloon_note_question', x, y, rx * 2.7, ry * 2.6, 'center');
+  ctx.restore();
+
+  if (!drew) {
+    ctx.fillStyle = placed ? 'rgba(155, 120, 214, 0.3)' : '#9b6cd6';
+    ctx.beginPath();
+    ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#7a4fc0';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.strokeStyle = '#b69be0';
+    ctx.beginPath();
+    ctx.moveTo(x, y + ry);
+    ctx.quadraticCurveTo(x - 20, y + ry + 42, x + 8, y + ry + 84);
+    ctx.stroke();
+  }
+
+  // Dynamic solfège label on a soft plate so the target stays readable over any art.
+  const label = target?.solfege ?? '';
+  if (label) {
+    const fs = rx * 0.6;
+    ctx.font = `900 ${fs}px ui-rounded, system-ui`;
+    const plateW = ctx.measureText(label).width + fs;
+    const plateH = fs * 1.5;
+    ctx.save();
+    ctx.globalAlpha = placed ? 0.5 : 1;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+    roundedRect(x - plateW / 2, y - plateH / 2, plateW, plateH, plateH / 2);
+    ctx.fill();
+    ctx.fillStyle = '#6f43c0';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, x, y + 1);
+    ctx.textAlign = 'start';
+    ctx.textBaseline = 'alphabetic';
+    ctx.restore();
+  }
+}
+
+function drawProjectile(width, height) {
+  if (game.phase !== 'burst') return;
+  const fromX = width * 0.15;
+  const fromY = height * 0.78;
+  const t = 1 - Math.max(0, Math.min(1, burstTimer / 0.7));
+  const x = fromX + (balloonPos.x - fromX) * t;
+  const y = fromY + (balloonPos.y - fromY) * t - Math.sin(t * Math.PI) * 64;
+  const size = Math.min(72, width * 0.06);
+  if (!drawSpriteContain('note_projectile', x, y, size, size, 'center')) {
+    drawNoteHead(x, y, staffGap(height), '#ffd25c');
+  }
 }
 
 function drawLauncher(width, height) {
-  const x = width * 0.16;
-  const y = height * 0.78;
+  const x = width * 0.15;
+  const y = height * 0.84;
+  const w = Math.min(170, width * 0.18);
+  if (drawSpriteContain('toy_note_cannon', x, y, w, w, 'bottom')) return;
   ctx.save();
   ctx.fillStyle = '#3f8de0';
   ctx.strokeStyle = '#2b3a4f';
   ctx.lineWidth = 3;
-  ctx.translate(x, y);
+  ctx.translate(x, y - w * 0.3);
   ctx.rotate(-0.5);
   roundedRect(-26, -30, 96, 60, 16);
   ctx.fill();
   ctx.stroke();
   ctx.restore();
-  ctx.fillStyle = '#f6b93b';
-  ctx.beginPath();
-  ctx.arc(x, y, 16, 0, Math.PI * 2);
-  ctx.fill();
 }
 
-function drawMistakes(width, height) {
-  if (game.mistakes.length === 0) return;
-  ctx.fillStyle = '#b06b54';
-  ctx.font = '800 16px ui-rounded, system-ui';
-  ctx.fillText(`温柔提示：已经尝试 ${game.mistakes.length} 次`, width * 0.1, height * 0.07);
+function drawWrongMarker(width, height) {
+  if (wrongFlash > 0 && game.balloon) {
+    const x = balloonPos.x + balloonPos.rx * 1.05;
+    const y = balloonPos.y - balloonPos.ry * 0.55;
+    const size = Math.min(64, width * 0.055);
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, wrongFlash / 0.4);
+    if (!drawSpriteContain('note_wrong_red_marker', x, y, size, size, 'center')) {
+      ctx.fillStyle = '#ef5d52';
+      ctx.font = '900 26px ui-rounded, system-ui';
+      ctx.fillText('再试一次', x - 24, y);
+    }
+    ctx.restore();
+  }
+  if (game.mistakes.length > 0) {
+    ctx.fillStyle = '#b06b54';
+    ctx.font = '800 15px ui-rounded, system-ui';
+    ctx.fillText(`温柔提示：已经尝试 ${game.mistakes.length} 次`, width * 0.1, height * 0.07);
+  }
 }
 
 function drawNoteHead(x, y, gap, color) {

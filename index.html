@@ -8,6 +8,11 @@
   </head>
   <body>
     <div id="app">
+      <div class="rotate-hint" aria-hidden="true">
+        <div class="rotate-icon">📱↻</div>
+        <p>请把设备横过来玩哦</p>
+      </div>
+
       <!-- ============ 首页 ============ -->
       <section class="screen screen-home is-active" data-screen="home">
         <button class="gear-btn" id="home-gear" type="button" aria-label="设置">⚙</button>
@@ -42,7 +47,7 @@
       <!-- ============ 声音校准 ============ -->
       <section class="screen screen-calibration" data-screen="calibration" hidden>
         <header class="cal-top">
-          <button class="round-btn" data-go-home type="button" aria-label="返回首页">⌂</button>
+          <button class="round-btn round-home" data-go-home type="button" aria-label="返回首页"></button>
           <div class="cal-title">
             <span class="note-deco">♪</span>
             <h2>声音校准</h2>
@@ -92,7 +97,7 @@
       <!-- ============ 游戏(唱谱 / 弹奏共用) ============ -->
       <section class="screen screen-game" data-screen="game" hidden>
         <header class="game-hud">
-          <button class="round-btn" data-go-home type="button" aria-label="返回首页">⌂</button>
+          <button class="round-btn round-home" data-go-home type="button" aria-label="返回首页"></button>
           <div class="hud-chip"><span>得分</span><strong id="score">0</strong></div>
           <div class="hud-chip"><span>连击</span><strong id="streak">0</strong></div>
           <div class="hud-instruction">
@@ -100,12 +105,14 @@
             <span id="hud-sub">命中后音符会飞上去填在乐谱上哦！</span>
           </div>
           <div class="hud-chip"><span>进度</span><strong id="progress">0 / 8</strong></div>
-          <button class="round-btn" id="replay-btn" type="button" aria-label="回放">↻</button>
+          <button class="round-btn round-replay" id="replay-btn" type="button" aria-label="回放"></button>
         </header>
 
         <div class="game-stage">
           <canvas id="game-canvas" width="1080" height="720"></canvas>
         </div>
+
+        <img id="keyboard-strip" class="keyboard-strip" src="assets/sprites/png/keyboard_reference_strip.png" alt="键盘参考" hidden>
 
         <div class="game-listen">
           <button class="listen-mic" id="game-mic" type="button" aria-label="打开麦克风">🎤</button>

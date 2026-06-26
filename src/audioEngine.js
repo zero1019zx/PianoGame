@@ -29,6 +29,50 @@ export function createAudioEngine() {
   let mfccSequence = [];
   let live = freshLive();
 
+  // --- diagnostic raw-audio capture (MediaRecorder over the live mic stream) ---
+  let mediaRecorder = null;
+  let recChunks = [];
+
+  function startCapture() {
+    if (!mediaStream || typeof MediaRecorder === 'undefined') return false;
+    recChunks = [];
+    try {
+      mediaRecorder = new MediaRecorder(mediaStream);
+    } catch {
+      try {
+        mediaRecorder = new MediaRecorder(mediaStream, { mimeType: 'audio/webm' });
+      } catch {
+        return false;
+      }
+    }
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) recChunks.push(event.data);
+    };
+    mediaRecorder.start();
+    return true;
+  }
+
+  function stopCapture() {
+    return new Promise((resolve) => {
+      if (!mediaRecorder) {
+        resolve(null);
+        return;
+      }
+      const recorder = mediaRecorder;
+      recorder.onstop = () => {
+        const type = recorder.mimeType || 'audio/webm';
+        resolve(recChunks.length ? new Blob(recChunks, { type }) : null);
+        mediaRecorder = null;
+      };
+      try {
+        recorder.stop();
+      } catch {
+        mediaRecorder = null;
+        resolve(null);
+      }
+    });
+  }
+
   async function enable() {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     if (!AudioCtx) return { ok: false, reason: 'unsupported' };
@@ -139,8 +183,11 @@ export function createAudioEngine() {
     resetSequence,
     pull,
     playTone,
+    startCapture,
+    stopCapture,
     isReady: () => ready,
-    getLive: () => live
+    getLive: () => live,
+    getSampleRate: () => audioContext?.sampleRate ?? null
   };
 }
 

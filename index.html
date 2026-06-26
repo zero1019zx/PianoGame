@@ -56,6 +56,18 @@
           <span class="env-pill" id="cal-env-pill">等待麦克风</span>
         </header>
 
+        <button class="cal-debug-toggle" id="cal-debug-toggle" type="button">🔧 诊断</button>
+        <div class="cal-debug" id="cal-debug" hidden>
+          <div class="cal-debug-head"><span>麦克风诊断</span><button id="cal-debug-close" type="button" aria-label="关闭">✕</button></div>
+          <code id="dbg-stats">点「打开麦克风」后对着麦克风出声，看 rms 是否变化</code>
+          <div class="cal-debug-actions">
+            <button id="dbg-mic" type="button">打开麦克风</button>
+            <button id="dbg-record" type="button">● 录 5 秒并下载</button>
+            <button id="dbg-download-log" type="button">下载上次日志</button>
+          </div>
+          <span id="dbg-record-state"></span>
+        </div>
+
         <div class="cal-cards">
           <section class="cal-card cal-card-sing">
             <div class="cal-card-head sing">🎤 唱谱校准</div>

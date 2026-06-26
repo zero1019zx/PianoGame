@@ -26,6 +26,8 @@ Original prompt: 复用该项目的做法，开展下一项目的工作：钢琴
 - 2026-06-26: Per user's choice (strengthen current approach), sing calibration now records **2 takes per syllable** (`SING_TAKES`), aggregated into a template carrying `takes[]`; in-game `matchSingingTemplate` scores against the closest take (min-DTW) and tolerance was loosened (30). Backward compatible with single-`mfccSequence` templates. Calibration UI shows 第N/2遍. Approach confirmed aligned with the goal: per-child voice templates (sing) + per-piano tuning offset (play), stored locally and read back in-game. Known ceiling: lightweight MFCC/DTW can confuse same-vowel name pairs (Do/Sol, Fa/La, Mi/Si).
 - 2026-06-26: `npm test` 19 pass (multi-take capture, manual take finalize, no-stall timeout, closest-take matching); jsdom smoke green.
 
+- 2026-06-26: Added a mic diagnostic panel on the calibration screen (🔧 诊断 toggle, fixed bottom-left). Live readout: mic ready, sampleRate, rms (+gate), f0, confidence, mfcc frame id, samples-this-take, phase/take. 「录 5 秒并下载」 records the real mic via MediaRecorder → downloads `calib-debug-audio.*` plus a per-frame `calib-debug-log.json` (t/rms/f0/conf/mfcc/samples), and stashes the last log in localStorage (`notation-debug-last`) for re-download. Purpose: tell apart a silent mic (permission/`file://`) from audio-fine-but-capture-rejecting (threshold/logic). Engine gained `startCapture`/`stopCapture`/`getSampleRate`. Verified: npm test 19 pass + jsdom smoke for the panel.
+
 ## TODO
 
 - The `keyboard_reference_strip` slice is now superseded by the interactive CSS keyboard; `panel_voice/piano_listening` slices remain reserved (the live listen panel is DOM/CSS). Wire them as decorative tablet backdrops only if desired.

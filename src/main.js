@@ -16,6 +16,8 @@ import {
   submitInput
 } from './notationGame.js';
 import {
+  SING_CAPTURE,
+  SING_TAKES,
   createPianoSession,
   createSingSession,
   feedPianoFrame,
@@ -113,8 +115,21 @@ const calResetBtn = document.querySelector('#cal-reset');
 const calSingControls = document.querySelector('#cal-sing-controls');
 const calSingHint = document.querySelector('#cal-sing-hint');
 const calNextBtn = document.querySelector('#cal-next');
+const calDebugToggle = document.querySelector('#cal-debug-toggle');
+const calDebug = document.querySelector('#cal-debug');
+const calDebugClose = document.querySelector('#cal-debug-close');
+const dbgStats = document.querySelector('#dbg-stats');
+const dbgMic = document.querySelector('#dbg-mic');
+const dbgRecord = document.querySelector('#dbg-record');
+const dbgDownloadLog = document.querySelector('#dbg-download-log');
+const dbgRecordState = document.querySelector('#dbg-record-state');
 
 let cal = { phase: 'idle', sing: null, piano: null, lastNeedle: 0 };
+let debugOpen = false;
+let debugRecording = false;
+let debugLog = [];
+let debugElapsed = 0;
+let debugRecTimer = 0;
 
 ['B', 'C', 'D', 'E', 'F'].forEach((key) => {
   const el = document.createElement('div');
@@ -264,10 +279,131 @@ function calibrationFrame(dt, live) {
       finishPianoPhase(result);
     }
   }
+
+  if (debugOpen) updateDebugStats(live);
+  if (debugRecording) {
+    debugElapsed += dt;
+    debugRecTimer -= dt;
+    debugLog.push({
+      t: Number(debugElapsed.toFixed(2)),
+      rms: Number(live.rms.toFixed(4)),
+      f0: live.frequency ? Math.round(live.frequency) : null,
+      conf: Number(live.confidence.toFixed(2)),
+      mfcc: live.mfccFrameId,
+      samples: cal.sing ? cal.sing.samples.length : 0,
+      phase: cal.phase
+    });
+    if (debugRecTimer <= 0) {
+      debugRecording = false;
+      finishDebugRecording();
+    }
+  }
+}
+
+// ---- microphone diagnostics: live readout + record-and-download ----
+function updateDebugStats(live) {
+  const c = cal.sing;
+  const sr = engine.getSampleRate();
+  dbgStats.textContent =
+    `mic ${engine.isReady() ? '✓' : '✗'} | ${sr ? `${sr}Hz` : '-'} | rms ${live.rms.toFixed(3)} (gate ${SING_CAPTURE.rmsGate}) | `
+    + `f0 ${live.frequency ? `${Math.round(live.frequency)}Hz` : '-'} | conf ${live.confidence.toFixed(2)} | mfcc#${live.mfccFrameId} | `
+    + `本遍采样 ${c ? c.samples.length : 0}/${SING_CAPTURE.minSamples} | 阶段 ${cal.phase}`
+    + (c ? ` · ${SOLFEGE[c.stepIndex] ?? '-'} 第${(c.takeIndex ?? 0) + 1}/${SING_TAKES}遍` : '');
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+async function debugEnableMic() {
+  dbgRecordState.textContent = '正在请求麦克风…';
+  const result = await engine.enable();
+  dbgRecordState.textContent = result.ok
+    ? '麦克风已就绪，出声看 rms 是否跳动'
+    : `麦克风打开失败：${result.reason}（注意：file:// 直接打开会禁麦，请用 npm run serve）`;
+}
+
+async function startDebugRecording() {
+  if (!engine.isReady()) {
+    const result = await engine.enable();
+    if (!result.ok) {
+      dbgRecordState.textContent = `麦克风未就绪：${result.reason}`;
+      return;
+    }
+  }
+  debugLog = [];
+  debugElapsed = 0;
+  debugRecTimer = 5;
+  debugRecording = true;
+  const ok = engine.startCapture();
+  dbgRecordState.textContent = ok ? '● 录音中…请大声唱 Do～(5 秒)' : '此浏览器不支持录音，仅记录数值日志(5 秒)';
+}
+
+async function finishDebugRecording() {
+  const blob = await engine.stopCapture();
+  const rmsMax = debugLog.reduce((m, r) => Math.max(m, r.rms), 0);
+  const framesWithSignal = debugLog.filter((r) => r.rms >= SING_CAPTURE.rmsGate).length;
+  const payload = {
+    meta: {
+      createdAt: new Date().toISOString(),
+      micReady: engine.isReady(),
+      sampleRate: engine.getSampleRate(),
+      frames: debugLog.length,
+      rmsMax: Number(rmsMax.toFixed(4)),
+      framesWithSignal,
+      rmsGate: SING_CAPTURE.rmsGate,
+      minSamples: SING_CAPTURE.minSamples
+    },
+    log: debugLog
+  };
+  try {
+    localStorage.setItem('notation-debug-last', JSON.stringify(payload));
+  } catch {
+    // localStorage may be unavailable; download still works.
+  }
+  downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }), 'calib-debug-log.json');
+  if (blob) {
+    const ext = (blob.type.split('/')[1] || 'webm').split(';')[0];
+    downloadBlob(blob, `calib-debug-audio.${ext}`);
+  }
+  dbgRecordState.textContent = `完成：rms峰值 ${rmsMax.toFixed(3)}，有信号帧 ${framesWithSignal}/${debugLog.length}`
+    + (blob ? '，已下载 音频+日志' : '(此浏览器没录到音频)，已下载日志');
+}
+
+function downloadLastLog() {
+  let raw = null;
+  try {
+    raw = localStorage.getItem('notation-debug-last');
+  } catch {
+    raw = null;
+  }
+  if (!raw) {
+    dbgRecordState.textContent = '还没有日志，先点「录 5 秒并下载」';
+    return;
+  }
+  downloadBlob(new Blob([raw], { type: 'application/json' }), 'calib-debug-log.json');
 }
 
 calStartBtn.addEventListener('click', startCalibration);
 calNextBtn.addEventListener('click', manualNextSyllable);
+calDebugToggle.addEventListener('click', () => {
+  debugOpen = !debugOpen;
+  calDebug.hidden = !debugOpen;
+});
+calDebugClose.addEventListener('click', () => {
+  debugOpen = false;
+  calDebug.hidden = true;
+});
+dbgMic.addEventListener('click', debugEnableMic);
+dbgRecord.addEventListener('click', startDebugRecording);
+dbgDownloadLog.addEventListener('click', downloadLastLog);
 calResetBtn.addEventListener('click', () => {
   resetCalibration(store, 'sing');
   resetCalibration(store, 'play');

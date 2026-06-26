@@ -294,6 +294,62 @@ button { border: 0; font: inherit; cursor: pointer; color: inherit; }
   box-shadow: 0 6px 12px rgba(91, 184, 95, 0.3);
 }
 .cal-next-btn:active { transform: scale(0.96); }
+
+/* 麦克风诊断面板 */
+.cal-debug-toggle {
+  position: fixed;
+  left: 14px;
+  bottom: 14px;
+  z-index: 40;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: #2b3a4f;
+  color: #fff;
+  font-weight: 800;
+  font-size: 0.82rem;
+  opacity: 0.78;
+  box-shadow: 0 6px 14px rgba(40, 70, 110, 0.3);
+}
+.cal-debug {
+  position: fixed;
+  left: 14px;
+  bottom: 56px;
+  z-index: 41;
+  width: min(440px, calc(100vw - 28px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #11161e;
+  color: #d7e3f0;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.4);
+}
+.cal-debug[hidden] { display: none; }
+.cal-debug-head { display: flex; justify-content: space-between; align-items: center; font-weight: 900; color: #8fd0f4; }
+.cal-debug-head button { background: none; color: #8fa6bd; font-size: 1.1rem; }
+.cal-debug code {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #0a0e14;
+  color: #7fe0a0;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.74rem;
+  line-height: 1.5;
+  word-break: break-all;
+}
+.cal-debug-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.cal-debug-actions button {
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: #243044;
+  color: #d7e3f0;
+  font-weight: 800;
+  font-size: 0.8rem;
+}
+.cal-debug-actions button:active { transform: scale(0.96); }
+#dbg-record-state { font-size: 0.76rem; color: #f6b93b; font-weight: 800; min-height: 1em; }
 .syl-n1 .syl { color: var(--red); }
 .syl-n2 .syl { color: #ef8a3b; }
 .syl-n3 .syl { color: #d9b13b; }

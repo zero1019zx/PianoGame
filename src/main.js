@@ -1,8 +1,10 @@
 import {
   centsBetween,
+  createPitchHold,
   matchDetectedPitch,
-  matchSingingTemplate,
-  midiToFrequency
+  midiToFrequency,
+  pitchClassCentsToMidi,
+  updatePitchHold
 } from './audioAnalysis.js';
 import {
   SOLFEGE,
@@ -467,7 +469,7 @@ const gameScreenEl = document.querySelector('[data-screen="game"]');
 
 const SOLF_COLORS = ['#ef5d52', '#ef8a3b', '#e0a400', '#5bb85f', '#3f8de0', '#9b6cd6', '#e06aa6'];
 const MODE_BADGE = {
-  sing: { name: '唱谱模式', sub: '说出气球里的音名' },
+  sing: { name: '唱谱模式', sub: '唱准气球里这个音' },
   play: { name: '弹奏模式', sub: '在钢琴上弹出它' }
 };
 
@@ -486,14 +488,22 @@ let balloonPos = { x: 0, y: 0, rx: 0, ry: 0 };
 let liveRecognized = null;
 let hitAnim = null;
 
-// Recognition strictness. Name (MFCC/timbre) is always the primary signal; the
-// modes only change how much the sung pitch matters.
+// Recognition strictness for 唱谱模式. Pitch is the real arbiter now: the child
+// must SING the target note's pitch (octave-agnostic) and HOLD it for a few
+// analysis frames. `cents` is the pitch tolerance — wide enough to forgive a
+// child's wobble and timbre, but never so wide that talking/noise slips through.
+// `minFrames` is how many consecutive on-target pitch frames are required, which
+// is what rejects a stray sound. Larger = stricter.
 const RECOG = {
-  loose: { needPitch: false, cents: Infinity, tol: 36 }, // 只看唱名
-  standard: { needPitch: true, cents: 220, tol: 32 }, // 名字 + 大致音高(±~2 半音)
-  strict: { needPitch: true, cents: 70, tol: 28 } // 名字 + 准音高(±~0.7 半音)
+  loose: { cents: 95, minFrames: 4 },
+  standard: { cents: 60, minFrames: 5 },
+  strict: { cents: 38, minFrames: 6 }
 };
 let recognitionMode = loadRecognitionMode();
+// Per-balloon pitch-hold tracker (the "stable + matching" double check).
+let pitchHold = createPitchHold();
+let lastJudgedTargetId = null;
+let lastPitchFrameId = -1;
 
 function loadRecognitionMode() {
   try {
@@ -510,12 +520,24 @@ function saveRecognitionMode(value) {
     // ignore
   }
 }
-// Octave-agnostic pitch distance (kids sing the name at any octave).
-function pitchClassCents(frequency, targetMidi) {
-  const m = 69 + 12 * Math.log2(frequency / 440);
-  let d = ((m - targetMidi) % 12 + 12) % 12;
-  if (d > 6) d -= 12;
-  return d * 100;
+function resetPitchHold() {
+  pitchHold = createPitchHold();
+  lastJudgedTargetId = getCurrentTarget(game)?.id ?? null;
+}
+// Nearest solfège to a detected pitch (octave-agnostic) — honest live feedback of
+// what note the child is actually singing, not a timbre guess.
+function nearestSolfege(frequency) {
+  if (!Number.isFinite(frequency) || frequency <= 0) return null;
+  let best = 0;
+  let bestDistance = Infinity;
+  SOLFEGE_MIDI.forEach((midi, index) => {
+    const distance = Math.abs(pitchClassCentsToMidi(frequency, midi) ?? Infinity);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = index;
+    }
+  });
+  return SOLFEGE[best];
 }
 
 const HUD_COPY = {
@@ -549,6 +571,9 @@ function startGame(nextMode) {
   wrongFlash = 0;
   bestStreak = 0;
   hitAnim = null;
+  pitchHold = createPitchHold();
+  lastJudgedTargetId = null;
+  lastPitchFrameId = -1;
   hudTitle.textContent = HUD_COPY[mode].title;
   hudSub.textContent = HUD_COPY[mode].sub;
   modeBadgeName.textContent = MODE_BADGE[mode].name;
@@ -642,45 +667,49 @@ function startPlayback() {
 }
 
 function judgeLiveAudio(live) {
-  if (!engine.isReady() || audioJudgeCooldown > 0 || game.phase !== 'aiming') return;
+  if (!engine.isReady() || game.phase !== 'aiming') return;
   const target = getCurrentTarget(game);
-  if (!target || live.rms < 0.009) return; // no pitch-confidence gate: the name is what matters
+  if (!target) return;
+
+  // New balloon → start a fresh hold so the previous note can't carry over.
+  if (target.id !== lastJudgedTargetId) resetPitchHold();
+
   const calibration = loadCalibrationState(store, mode);
   if (!calibration.completed) return;
+  if (audioJudgeCooldown > 0) return;
+
+  // Only act on a freshly computed pitch frame so the hold counts real analyses,
+  // not repeated render frames.
+  if (live.pitchFrameId === lastPitchFrameId) return;
+  lastPitchFrameId = live.pitchFrameId;
 
   if (mode === 'sing') {
     const cfg = RECOG[recognitionMode] ?? RECOG.loose;
-    // Name is decided by timbre (MFCC/DTW), independent of how high/low they sang.
-    const match = matchSingingTemplate({
-      detectedFrequency: live.frequency,
-      detectedMfccSequence: live.mfccSequence.slice(-12),
-      templates: calibration.templates ?? [],
-      toleranceCents: 9999,
-      tolerance: cfg.tol
+    // DOUBLE CHECK: (1) a clear, voiced pitch must exist (detector returns null
+    // for noise/speech), and (2) that pitch must match the target note, held for
+    // `minFrames`. Talking or background noise satisfies neither, so it can no
+    // longer trigger a hit — which was the core bug.
+    const evaluation = updatePitchHold(pitchHold, { frequency: live.frequency }, {
+      targetMidi: target.midi,
+      toleranceCents: cfg.cents,
+      minFrames: cfg.minFrames
     });
-    liveRecognized = match.solfege ?? liveRecognized;
-    if (!match.correct || !match.solfege) return; // not a confident name yet
-
-    // Pitch is only an optional gate, octave-agnostic.
-    let pitchOk = true;
-    if (cfg.needPitch && live.frequency) {
-      const cents = pitchClassCents(live.frequency, target.midi);
-      liveCents = cents;
-      pitchOk = Math.abs(cents) <= cfg.cents;
-    } else {
-      liveCents = null;
-    }
-
-    if (match.solfege === target.solfege && pitchOk) {
+    pitchHold = evaluation.hold;
+    liveCents = evaluation.voiced ? evaluation.cents : null;
+    if (live.frequency) liveRecognized = nearestSolfege(live.frequency);
+    if (evaluation.hit) {
       registerAudioHit(submitInput(game, { mode: 'sing', solfege: target.solfege }));
-    } else if (match.solfege !== target.solfege) {
-      submitInput(game, { mode: 'sing', solfege: match.solfege });
-      audioJudgeCooldown = 1.1;
-      wrongFlash = 0.8;
-      updateGameHud();
     }
   } else {
-    if (!live.frequency || live.confidence < 0.5) return;
+    // 弹奏模式: a confident, in-tune pitch held briefly. No auto-penalty — a wrong
+    // or misheard note simply doesn't advance, it never marks a mistake.
+    if (!live.frequency || live.confidence < 0.6) {
+      liveCents = null;
+      pitchHold = updatePitchHold(pitchHold, { frequency: null }, {
+        targetMidi: target.midi, toleranceCents: 55, minFrames: 2
+      }).hold;
+      return;
+    }
     const match = matchDetectedPitch({
       targetMidi: target.midi,
       detectedFrequency: live.frequency,
@@ -688,13 +717,12 @@ function judgeLiveAudio(live) {
       toleranceCents: 55
     });
     liveCents = match.cents;
-    if (match.correct) {
+    const evaluation = updatePitchHold(pitchHold, { frequency: live.frequency }, {
+      targetMidi: target.midi, toleranceCents: 60, minFrames: 2
+    });
+    pitchHold = evaluation.hold;
+    if (evaluation.hit && match.correct) {
       registerAudioHit(submitInput(game, { mode: 'play', midi: target.midi }));
-    } else if (Math.abs(match.cents) > 90) {
-      submitInput(game, { mode: 'play', midi: match.midi });
-      audioJudgeCooldown = 1.1;
-      wrongFlash = 0.8;
-      updateGameHud();
     }
   }
 }

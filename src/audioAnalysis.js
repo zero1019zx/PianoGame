@@ -199,37 +199,129 @@ export function dtwDistance(sequenceA, sequenceB) {
   return dp[sequenceA.length][sequenceB.length] / (sequenceA.length + sequenceB.length);
 }
 
-export function detectPitchFromTimeDomain(samples, sampleRate) {
+// Robust monophonic pitch detection via *normalized* autocorrelation (a.k.a. the
+// clarity / NSDF peak). Unlike the old `1 - |a-b|` metric — which saturated near
+// 1.0 for any quiet signal and so reported confident pitch for silence and noise
+// — this divides the correlation by the signal energy, so the peak is only high
+// for a genuinely periodic (sung/played) tone. Noise and the gliding, partly
+// unvoiced energy of speech stay well below the clarity threshold and yield no
+// pitch at all. This is the foundation of the "did they actually sing a note?"
+// check: no clear pitch -> not a hit.
+export function detectPitchFromTimeDomain(samples, sampleRate, {
+  minFrequency = 130,
+  maxFrequency = 1000,
+  clarityThreshold = 0.9,
+  rmsGate = 0.01
+} = {}) {
+  const length = samples.length;
   const rms = rootMeanSquare(samples);
-  if (rms < 0.01) return { frequency: null, confidence: 0, rms };
+  if (rms < rmsGate) return { frequency: null, confidence: 0, rms };
 
-  let bestOffset = -1;
-  let bestCorrelation = 0;
-  const minFrequency = 120;
-  const maxFrequency = 900;
-  const minOffset = Math.floor(sampleRate / maxFrequency);
-  const maxOffset = Math.min(Math.floor(sampleRate / minFrequency), Math.floor(samples.length / 2));
+  // Remove DC so the normalized correlation isn't biased by an offset.
+  let mean = 0;
+  for (let index = 0; index < length; index += 1) mean += samples[index];
+  mean /= length;
 
-  for (let offset = minOffset; offset <= maxOffset; offset += 1) {
+  const minLag = Math.max(2, Math.floor(sampleRate / maxFrequency));
+  const maxLag = Math.min(Math.floor(sampleRate / minFrequency), Math.floor(length / 2));
+
+  const clarityAt = (lag) => {
     let correlation = 0;
-    for (let index = 0; index < samples.length - offset; index += 1) {
-      correlation += 1 - Math.abs(samples[index] - samples[index + offset]);
+    let energyA = 0;
+    let energyB = 0;
+    for (let index = 0; index < length - lag; index += 1) {
+      const a = samples[index] - mean;
+      const b = samples[index + lag] - mean;
+      correlation += a * b;
+      energyA += a * a;
+      energyB += b * b;
     }
-    correlation /= samples.length - offset;
-    if (correlation > bestCorrelation) {
-      bestCorrelation = correlation;
-      bestOffset = offset;
+    const norm = Math.sqrt(energyA * energyB);
+    return norm > 1e-9 ? correlation / norm : 0; // in [-1, 1]
+  };
+
+  let bestLag = -1;
+  let bestClarity = 0;
+  for (let lag = minLag; lag <= maxLag; lag += 1) {
+    const clarity = clarityAt(lag);
+    if (clarity > bestClarity) {
+      bestClarity = clarity;
+      bestLag = lag;
     }
   }
 
-  if (bestOffset <= 0 || bestCorrelation < 0.35) {
-    return { frequency: null, confidence: bestCorrelation, rms };
+  if (bestLag <= 0 || bestClarity < clarityThreshold) {
+    return { frequency: null, confidence: Math.max(0, bestClarity), rms };
+  }
+
+  // Parabolic interpolation around the peak for sub-sample period accuracy, so the
+  // reported frequency (and the child's 准/偏高/偏低 feedback) isn't quantized to
+  // whole-sample lags.
+  let refinedLag = bestLag;
+  if (bestLag > minLag && bestLag < maxLag) {
+    const prev = clarityAt(bestLag - 1);
+    const next = clarityAt(bestLag + 1);
+    const denominator = prev - 2 * bestClarity + next;
+    if (denominator !== 0) {
+      const shift = (0.5 * (prev - next)) / denominator;
+      if (Math.abs(shift) <= 1) refinedLag = bestLag + shift;
+    }
   }
 
   return {
-    frequency: sampleRate / bestOffset,
-    confidence: Math.min(1, Math.max(0, bestCorrelation)),
+    frequency: sampleRate / refinedLag,
+    confidence: Math.min(1, bestClarity),
     rms
+  };
+}
+
+// Signed distance, in cents, from a detected frequency to the *nearest octave* of
+// a target MIDI note. Octave-agnostic on purpose: a 4–6 y/o sings far above an
+// adult, so "Do (C4)" sung as C5 must still count. Range (-600, 600].
+export function pitchClassCentsToMidi(frequency, targetMidi) {
+  if (!Number.isFinite(frequency) || frequency <= 0) return null;
+  const midi = A4_MIDI + 12 * Math.log2(frequency / A4_FREQUENCY);
+  let delta = (((midi - targetMidi) % 12) + 12) % 12;
+  if (delta > 6) delta -= 12;
+  return delta * 100;
+}
+
+// --- "did they hold the right note?" — the second half of the double check ---
+// A hit needs BOTH a clear, voiced pitch AND that pitch matching the target,
+// *sustained* over several consecutive analysis frames. A single stray frame (a
+// cough, a consonant, a clatter) can't trigger a hit, and a clearly wrong sung
+// pitch resets progress. Brief unvoiced gaps only decay it, so a child can take
+// a quick breath mid-note.
+export function createPitchHold() {
+  return { streak: 0, lastCents: null, voiced: false };
+}
+
+export function evaluatePitchFrame(frame, { targetMidi, toleranceCents }) {
+  const frequency = frame?.frequency ?? null;
+  if (!Number.isFinite(frequency) || frequency <= 0) {
+    return { voiced: false, onTarget: false, cents: null };
+  }
+  const cents = pitchClassCentsToMidi(frequency, targetMidi);
+  return { voiced: true, onTarget: Math.abs(cents) <= toleranceCents, cents };
+}
+
+export function updatePitchHold(hold, frame, { targetMidi, toleranceCents, minFrames }) {
+  const evaluation = evaluatePitchFrame(frame, { targetMidi, toleranceCents });
+  let streak = hold.streak;
+  if (!evaluation.voiced) {
+    streak = Math.max(0, streak - 1); // tolerate a brief breath, don't hard-reset
+  } else if (evaluation.onTarget) {
+    streak += 1;
+  } else {
+    streak = 0; // a clearly different sung pitch starts over
+  }
+  const hit = streak >= minFrames;
+  return {
+    hold: { streak: hit ? 0 : streak, lastCents: evaluation.cents, voiced: evaluation.voiced },
+    hit,
+    voiced: evaluation.voiced,
+    onTarget: evaluation.onTarget,
+    cents: evaluation.cents
   };
 }
 

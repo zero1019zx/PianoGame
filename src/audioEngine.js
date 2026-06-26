@@ -29,6 +29,7 @@ export function createAudioEngine() {
   let mfccTimer = 0;
   let mfccFrameId = 0;
   let pitchFrame = 0;
+  let pitchFrameId = 0;
   let mfccSequence = [];
   let live = freshLive();
 
@@ -131,13 +132,20 @@ export function createAudioEngine() {
     pitchFrame = (pitchFrame + 1) % PITCH_DECIMATION;
     let frequency = live.frequency;
     let confidence = live.confidence;
-    if (rms < SILENCE_RMS) {
-      frequency = null;
-      confidence = 0;
-    } else if (pitchFrame === 0) {
-      const detected = detectPitchFromTimeDomain(timeBuffer, audioContext.sampleRate);
-      frequency = detected.frequency;
-      confidence = detected.confidence;
+    // Recompute pitch on the decimated frame and bump pitchFrameId so consumers
+    // (the in-game pitch-hold judge) can step exactly once per fresh analysis,
+    // independent of render frame rate. A silent frame produces a null pitch,
+    // which lets a held streak decay during a pause.
+    if (pitchFrame === 0) {
+      pitchFrameId += 1;
+      if (rms < SILENCE_RMS) {
+        frequency = null;
+        confidence = 0;
+      } else {
+        const detected = detectPitchFromTimeDomain(timeBuffer, audioContext.sampleRate);
+        frequency = detected.frequency;
+        confidence = detected.confidence;
+      }
     }
 
     mfccTimer -= dt;
@@ -160,7 +168,8 @@ export function createAudioEngine() {
       environment: classifyEnvironment({ rms, confidence }),
       mfcc,
       mfccFrameId,
-      mfccSequence
+      mfccSequence,
+      pitchFrameId
     };
     return live;
   }
@@ -203,6 +212,7 @@ function freshLive() {
     environment: { status: 'idle', label: '等待麦克风', score: 0 },
     mfcc: null,
     mfccFrameId: 0,
-    mfccSequence: []
+    mfccSequence: [],
+    pitchFrameId: 0
   };
 }
